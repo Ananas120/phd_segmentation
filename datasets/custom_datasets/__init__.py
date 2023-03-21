@@ -1,4 +1,3 @@
-
 # Copyright (C) 2022 yui-mhcp project's author. All rights reserved.
 # Licenced under the Affero GPL v3 Licence (the "Licence").
 # you may not use this file except in compliance with the License.
@@ -26,9 +25,10 @@ _dataset_dir = os.environ.get(
 )
 
 def __load():
-    for module_name in glob.glob(os.path.join('datasets', 'custom_datasets', '*.py')):
-        if module_name.endswith('__init__.py'): continue
-        module_name = module_name.replace(os.path.sep, '.')[:-3]
+    for module_name in os.listdir(os.path.join('datasets', 'custom_datasets')):
+        if module_name.startswith(('__', '.')): continue
+        module_name = os.path.join('datasets', 'custom_datasets', module_name)
+        module_name = module_name.split('.')[0].replace(os.path.sep, '.')
 
         module = __import__(module_name)
 
