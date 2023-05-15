@@ -15,6 +15,9 @@ import tensorflow as tf
 from custom_train_objects.losses.masked_loss import MaskedMSE, MaskedMAE
 from custom_train_objects.losses.ctc_loss import CTCLoss
 from custom_train_objects.losses.ge2e_loss import GE2ELoss
+from custom_train_objects.losses.ge2e_seg_loss import GE2ESegLoss
+from custom_train_objects.losses.dice_loss import *
+from custom_train_objects.losses.east_loss import EASTLoss
 from custom_train_objects.losses.yolo_loss import YoloLoss
 
 _keras_losses = {
@@ -46,6 +49,12 @@ _losses = {
     'MaskedMSE'         : MaskedMSE,
     'CTCLoss'           : CTCLoss,
     'GE2ELoss'          : GE2ELoss,
+    'GE2ESegLoss'       : GE2ESegLoss,
+    'DiceLoss'          : DiceLoss,
+    'SparseDiceLoss'    : SparseDiceLoss,
+    'DiceWithBCELoss'   : DiceWithBCELoss,
+    'DiceWithCELoss'    : DiceWithCELoss,
+    'EASTLoss'          : EASTLoss,
     'YoloLoss'          : YoloLoss,
     ** _keras_losses
 }

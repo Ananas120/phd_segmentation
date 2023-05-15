@@ -59,7 +59,15 @@ def image_seg_dataset_wrapper(name, task, ** default_config):
         return fn
     return wrapper
 
-def preprocess_tcia_annots(directory, metadata_file = 'metadata.json', overwrite = False, tqdm = lambda x: x, ** kwargs):
+def preprocess_tcia_annots(directory,
+                           subset = None,
+                           
+                           overwrite     = False,
+                           metadata_file = 'metadata.json',
+                           
+                           tqdm = lambda x: x,
+                           ** kwargs
+                          ):
     def parse_serie(path, serie_num = -1):
         dirs = sorted(os.listdir(path), key = lambda d: len(os.listdir(os.path.join(path, d))))
         if len(dirs) == 1:
@@ -78,8 +86,8 @@ def preprocess_tcia_annots(directory, metadata_file = 'metadata.json', overwrite
                 with dcm.dcmread(seg_file) as seg:
                     if hasattr(seg, 'StructureSetROISequence'):
                         organs = [struct.ROIName for struct in seg.StructureSetROISequence]
-                    elif hasattr(seg, 'SegmentSequence'):
-                        organs = [s.SegmentDescription for s in seg.SegmentSequence]
+                    #elif hasattr(seg, 'SegmentSequence'):
+                    #    organs = [s.SegmentDescription for s in seg.SegmentSequence]
                     else:
                         raise RuntimeError('Unknown annotation sequence name for file {} :\n{}'.format(seg_file, seg))
                     
@@ -93,16 +101,22 @@ def preprocess_tcia_annots(directory, metadata_file = 'metadata.json', overwrite
             patient_sex = all_segs_infos[seg_file]['sex']
             organs      = all_segs_infos[seg_file]['organs']
             
+            frames      = sorted([os.path.join(imgs_dir, f) for f in os.listdir(imgs_dir)])
+            with dcm.dcmread(frames[0]) as ct1, dcm.dcmread(frames[-1]) as ct2:
+                if ct1.SliceLocation > ct2.SliceLocation: frames = frames[::-1]
+                thickness = ct1.SliceThickness
+            
             segmentations_infos.append({
                 'subject_id'      : patient_id,
                 'serie'           : serie_num,
                 'segmentation_id' : seg_dir,
                 'sex'             : patient_sex,
+                'thickness'       : thickness,
                 'images_dir'      : imgs_dir,
                 'nb_images'       : len(os.listdir(imgs_dir)),
-                'images'          : sorted([os.path.join(imgs_dir, f) for f in os.listdir(imgs_dir)]),
+                'images'          : frames,
                 'segmentation'    : seg_file,
-                'organs'          : organs
+                'labels'          : organs
             })
         
         return segmentations_infos
@@ -126,6 +140,7 @@ def preprocess_tcia_annots(directory, metadata_file = 'metadata.json', overwrite
 
     metadata = []
     for client_dir in tqdm(os.listdir(data_dir)):
+        if subset and subset not in client_dir: continue
         client_dir = os.path.join(data_dir, client_dir)
         if os.path.isdir(client_dir): metadata.extend(parse_client(client_dir))
     
@@ -133,6 +148,64 @@ def preprocess_tcia_annots(directory, metadata_file = 'metadata.json', overwrite
     
     return pd.DataFrame(metadata)
 
+@image_seg_dataset_wrapper(
+    name  = 'total_segmentator', task  = IMAGE_SEGMENTATION, directory = '{}/Totalsegmentator_dataset'
+)
+def preprocess_totalsegmentator_annots(directory, combined_mask = ('masks.npz', 'masks.nii.gz'), tqdm = lambda x: x, ** kwargs):
+    metadata = []
+    for client_id in tqdm(os.listdir(directory)):
+        if '.' in client_id: continue
+        client_dir = os.path.join(directory, client_id)
+        
+        segmentations = list(sorted(
+            (filename.split('.')[0], os.path.join(client_dir, 'segmentations', filename))
+            for filename in os.listdir(os.path.join(client_dir, 'segmentations'))
+        ))
+        
+        mask_file = None
+        for comb_mask_file in combined_mask:
+            comb_mask_file = os.path.join(client_dir, comb_mask_file)
+            if os.path.exists(comb_mask_file):
+                mask_file = comb_mask_file
+                break
+        
+        metadata.append({
+            'subject_id'      : client_id,
+            'thickness'       : -1,
+            'images'          : os.path.join(client_dir, 'ct.nii.gz'),
+            'segmentation'    : [file for _, file in segmentations] if not mask_file else mask_file,
+            'label'           : [organ for organ, _ in segmentations]
+        })
+    
+    return pd.DataFrame(metadata)
+
+tcia_manifests = {
+    'LSTCS'        : 'manifest-1557326747206',
+    'Radiomics'    : 'manifest-1603198545583',
+    'Pediatric-CT' : 'manifest-1647979711903'
+}
+
+if os.path.exists(TCIA_DIR):
+    image_seg_dataset_wrapper(
+        name  = 'LSTCS',
+        task  = IMAGE_SEGMENTATION,
+        train = {'directory' : os.path.join(TCIA_DIR, 'manifest-1557326747206'), 'subset' : 'Train'},
+        valid = {'directory' : os.path.join(TCIA_DIR, 'manifest-1557326747206'), 'subset' : 'Test'}
+    )(preprocess_tcia_annots)
+
+    image_seg_dataset_wrapper(
+        name      = 'Radiomics',
+        task      = IMAGE_SEGMENTATION,
+        directory = os.path.join(TCIA_DIR, 'manifest-1603198545583')
+    )(preprocess_tcia_annots)
+
+    image_seg_dataset_wrapper(
+        name      = 'Pediatric-CT',
+        task      = IMAGE_SEGMENTATION,
+        directory = os.path.join(TCIA_DIR, 'manifest-1647979711903')
+    )(preprocess_tcia_annots)
+
+"""
 if os.path.exists(TCIA_DIR):
     for manifest_dir in os.listdir(TCIA_DIR):
         image_seg_dataset_wrapper(
@@ -140,3 +213,4 @@ if os.path.exists(TCIA_DIR):
             task      = IMAGE_SEGMENTATION,
             directory = os.path.join(TCIA_DIR, manifest_dir)
         )(preprocess_tcia_annots)
+"""

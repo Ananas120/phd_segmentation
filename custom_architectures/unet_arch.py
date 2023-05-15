@@ -13,125 +13,96 @@ import tensorflow as tf
 
 from tensorflow.keras.layers import MaxPooling2D, MaxPooling3D, AveragePooling2D, AveragePooling3D
 
+from custom_layers import get_activation
 from custom_architectures.current_blocks import (
-    _get_var, _get_concat_layer, Conv2DBN, Conv3DBN, Conv2DTransposeBN, Conv3DTransposeBN
+    _get_var, _get_concat_layer, Conv2DBN, Conv3DBN, Conv2DTransposeBN, Conv3DTransposeBN, SeparableConv3DBN
 )
 
-def UNet(input_shape    = 512,
-         output_dim     = 1,
+def VGGUNet(input_shape    = 512,
+            output_dim     = 1,
          
-         n_stages       = 5,
-         n_conv_per_stage   = lambda i: 1 if i == 0 else 2,
+            n_conv_per_stage   = lambda i: 1 if i == 0 else 2,
          
-         filters        = [32, 64, 128, 256, 512],
-         kernel_size    = 3,
-         strides        = 1,
-         use_bias       = True,
+            filters        = [16, 32, 64, 128, 256],
+            kernel_size    = 3,
+            strides        = 1,
+            use_bias       = True,
          
-         activation     = 'relu',
-         pool_type      = 'max',
-         pool_strides   = 2,
-         bnorm          = 'never',
-         drop_rate      = 0.3,
+            activation     = 'relu',
+            pool_type      = 'max',
+            pool_strides   = 2,
+            bnorm          = 'after',
+            drop_rate      = 0.25,
          
-         upsampling_activation  = None,
+            n_middle_stages = 1,
+            n_middle_conv   = 2,
+            middle_filters  = 256,
+            middle_kernel_size = 3,
+            middle_use_bias    = True,
+            middle_activation  = 'relu',
+            middle_bnorm       = 'never',
+            middle_drop_rate   = 0.25,
          
-         concat_mode    = 'concat',
+            upsampling_activation  = None,
          
-         final_name     = 'segmentation_layer',
-         final_activation   = 'sigmoid',
+            concat_mode    = 'concat',
+             
+            final_name     = 'segmentation_layer',
+            final_activation   = 'sigmoid',
+            
+            freeze  = True,
          
-         name   = None,
-         ** kwargs
-        ):
+            name   = None,
+            ** kwargs
+           ):
     if not isinstance(input_shape, tuple): input_shape = (input_shape, input_shape, 3)
 
-    if len(input_shape) == 3:
-        conv_fn     = Conv2DBN
-        pool_fn     = MaxPooling2D if pool_type == 'max' else AveragePooling2D
-        upsample_fn = Conv2DTransposeBN
-    else:
-        conv_fn     = Conv3DBN
-        pool_fn     = MaxPooling3D if pool_type == 'max' else AveragePooling3D
-        upsample_fn = Conv3DTransposeBN
+    assert len(input_shape) == 3
+
+    conv_fn     = Conv2DBN
+    pool_fn     = MaxPooling2D if pool_type == 'max' else AveragePooling2D
+    upsample_fn = Conv2DTransposeBN
+    out_layer   = tf.keras.layers.Conv2D
+
+    vgg = tf.keras.applications.VGG16(
+        input_shape = input_shape, include_top = False, weights = 'imagenet'
+    )
     
-    inputs  = tf.keras.layers.Input(shape = input_shape, name = 'input_image')
+    x = vgg.get_layer('block5_pool').output
+    residuals = [None] + [
+        vgg.get_layer('block{}_pool'.format(i)).output
+        for i in range(1, 5)
+    ]
 
-    x = inputs
-    residuals = []
-    for i in range(n_stages):
-        n_conv = _get_var(n_conv_per_stage, i)
-        if pool_type:
+    ####################
+    #    Middle part   #
+    ####################
+    
+    for i in range(n_middle_stages):
+        n_conv = _get_var(n_middle_conv, i)
+        for j in range(n_conv):
             x = conv_fn(
                 x,
-                filters     = [_get_var(filters, i)] * n_conv,
-                kernel_size = _get_var(kernel_size, i),
+                filters     = _get_var(_get_var(middle_filters, i), j),
+                kernel_size = _get_var(_get_var(middle_kernel_size, i), j),
+                use_bias    = _get_var(_get_var(middle_use_bias, i), j),
                 strides     = 1,
-                use_bias    = _get_var(use_bias, i),
                 padding     = 'same',
 
-                activation  = _get_var(activation, i),
+                activation  = _get_var(_get_var(middle_activation, i), j),
 
-                bnorm       = _get_var(bnorm, i),
-                drop_rate   = 0.,
+                bnorm       = _get_var(_get_var(middle_bnorm, i), j),
+                drop_rate   = _get_var(_get_var(middle_drop_rate, i), j),
 
-                bn_name = 'down_bn{}'.format(i + 1),
-                name    = 'down_conv{}'.format(i + 1)
+                bn_name = 'middle_bn{}{}'.format(i + 1, '' if n_conv == 1 else '-{}'.format(j + 1)),
+                name    = 'middle_conv{}{}'.format(i + 1, '' if n_conv == 1 else '-{}'.format(j + 1))
             )
-            residuals.append(x)
 
-            if i < n_stages - 1:
-                x = pool_fn(
-                    pool_size = _get_var(pool_strides, i), strides = _get_var(pool_strides, i)
-                )(x)
-
-            if _get_var(drop_rate, i) > 0:
-                x = tf.keras.layers.Dropout(_get_var(drop_rate, i))(x)
-            
-        else:
-            if i < n_stages - 1: n_conv -= 1
-            if n_conv <= 0:
-                raise ValueError('`n_conv_per_stage` must be > 1 when using strides but got {} at stage {}'.format(
-                    n_conv, i
-                ))
-            x = conv_fn(
-                x,
-                filters     = [_get_var(filters, i)] * n_conv,
-                kernel_size = _get_var(kernel_size, i),
-                strides     = 1,
-                use_bias    = _get_var(use_bias, i),
-                padding     = 'same',
-
-                activation  = _get_var(activation, i),
-
-                bnorm       = _get_var(bnorm, i),
-                drop_rate   = 0. if i < n_stages - 1 else _get_var(drop_rate, i),
-
-                bn_name = 'down_bn{}'.format(i + 1),
-                name    = 'down_conv{}'.format(i + 1)
-            )
-            residuals.append(x)
-
-            if i < n_stages - 1:
-                x = conv_fn(
-                    x,
-                    filters     = _get_var(filters, i),
-                    kernel_size = _get_var(kernel_size, i),
-                    strides     = _get_var(strides, i),
-                    use_bias    = _get_var(use_bias, i),
-                    padding     = 'same',
-
-                    activation  = _get_var(activation, i),
-
-                    bnorm       = _get_var(bnorm, i),
-                    drop_rate   = _get_var(drop_rate, i),
-
-                    bn_name = 'down_bn{}'.format(i + 1),
-                    name    = 'down_conv{}_{}'.format(i + 1, n_conv)
-                )
-
-
-    for i in reversed(range(n_stages - 1)):
+    ####################
+    # Upsampling part  #
+    ####################
+    
+    for i in reversed(range(5)):
         x = upsample_fn(
             x,
             filters     = _get_var(filters, i),
@@ -143,41 +114,239 @@ def UNet(input_shape    = 512,
             drop_rate   = 0.,
             name        = 'upsampling_{}'.format(i + 1)
         )
-        x = _get_concat_layer(concat_mode)([x, residuals[i]])
-        x = conv_fn(
-            x,
-            filters     = [_get_var(kwargs.get('up_filters', filters), i)] * _get_var(
-                kwargs.get('up_n_conv_per_stage', n_conv_per_stage), i
-            ),
-            kernel_size = _get_var(kwargs.get('up_kernel_size', kernel_size), i),
-            use_bias    = _get_var(kwargs.get('up_use_bias', use_bias), i),
-            strides     = 1,
-            padding     = 'same',
-            
-            activation  = _get_var(kwargs.get('up_activation', activation), i),
+        if i > 0:
+            concat_mode_i = _get_var(concat_mode, i)
+            if concat_mode_i is not None:
+                x = _get_concat_layer(concat_mode_i)([x, residuals[i]])
+        
+        n_conv = _get_var(kwargs.get('up_n_conv_per_stage', n_conv_per_stage), i)
+        for j in range(n_conv):
+            x = conv_fn(
+                x,
+                filters     = _get_var(_get_var(kwargs.get('up_filters', filters), i), j),
+                kernel_size = _get_var(_get_var(kwargs.get('up_kernel_size', kernel_size), i), j),
+                strides     = 1,
+                use_bias    = _get_var(_get_var(kwargs.get('up_use_bias', use_bias), i), j),
+                padding     = 'same',
 
-            bnorm       = _get_var(kwargs.get('up_bnorm', bnorm), i),
-            drop_rate   = _get_var(kwargs.get('up_drop_rate', drop_rate), i),
-            
-            bn_name = 'up_bn{}'.format(i + 1),
-            name    = 'up_conv{}'.format(i + 1)
-        )
+                activation  = _get_var(_get_var(kwargs.get('up_activation', activation), i), j),
 
+                bnorm       = _get_var(_get_var(kwargs.get('up_bnorm', bnorm), i), j),
+                drop_rate   = 0. if j < n_conv - 1 else _get_var(kwargs.get('up_drop_rate', drop_rate), i),
+
+                bn_name = 'up_bn{}{}'.format(i + 1, '' if n_conv == 1 else '-{}'.format(j + 1)),
+                name    = 'up_conv{}{}'.format(i + 1, '' if n_conv == 1 else '-{}'.format(j + 1))
+            )
+
+    ####################
+    #   Output part    #
+    ####################
+    
     if isinstance(output_dim, (list, tuple)):
-        out = [tf.keras.layers.Conv2D(
+        out = [out_layer(
             filters     = out_dim_i,
             kernel_size = 1,
             strides     = 1,
-            activation  = _get_var(final_activation, i),
             name    = '{}_{}'.format(final_name, i + 1) if isinstance(final_name, str) else final_name[i]
         )(x) for i, out_dim_i in enumerate(output_dim)]
+        out = [
+            get_activation(_get_var(final_activation, i), dtype = 'float32')(out_i) if _get_var(final_activation, i) else out_i
+            for out_i in out
+        ]
     else:
-        out = tf.keras.layers.Conv2D(
-            output_dim, kernel_size = 1, strides = 1, activation = final_activation, name = final_name
+        out = out_layer(
+            output_dim, kernel_size = 1, strides = 1, name = final_name
         )(x)
+        out = get_activation(final_activation, dtype = 'float32')(out)
+    
+    model = tf.keras.models.Model(inputs = vgg.input, outputs =  out, name = name)
+    
+    if freeze:
+        for layer in vgg.layers: layer.trainable = False
+    
+    return model
+
+def UNet(input_shape    = 512,
+         output_dim     = 1,
+         
+         n_stages       = 4,
+         n_conv_per_stage   = lambda i: 1 if i == 0 else 2,
+         
+         filters        = [32, 64, 128, 256],
+         kernel_size    = 3,
+         strides        = 1,
+         use_bias       = True,
+         
+         activation     = 'relu',
+         pool_type      = 'max',
+         pool_strides   = 2,
+         bnorm          = 'never',
+         drop_rate      = 0.25,
+         
+         n_middle_stages = 1,
+         n_middle_conv   = 2,
+         middle_filters  = 512,
+         middle_kernel_size = 3,
+         middle_use_bias    = True,
+         middle_activation  = 'relu',
+         middle_bnorm       = 'never',
+         middle_drop_rate   = 0.25,
+         
+         upsampling_activation  = None,
+         
+         concat_mode    = 'concat',
+         
+         final_name     = 'segmentation_layer',
+         final_activation   = 'sigmoid',
+         
+         mixed_precision     = False,
+         
+         name   = None,
+         ** kwargs
+        ):
+    if not isinstance(input_shape, tuple): input_shape = (input_shape, input_shape, 3)
+
+    if mixed_precision:
+        policy = tf.keras.mixed_precision.Policy('mixed_float16')
+        tf.keras.mixed_precision.set_global_policy(policy)
+    
+    if len(input_shape) == 3:
+        conv_fn     = Conv2DBN
+        pool_fn     = MaxPooling2D if pool_type == 'max' else AveragePooling2D
+        upsample_fn = Conv2DTransposeBN
+        out_layer   = tf.keras.layers.Conv2D
+    else:
+        conv_fn     = Conv3DBN
+        pool_fn     = MaxPooling3D if pool_type == 'max' else AveragePooling3D
+        upsample_fn = Conv3DTransposeBN
+        out_layer   = tf.keras.layers.Conv3D
+
+    inputs  = tf.keras.layers.Input(shape = input_shape, name = 'input_image')
+
+    x = inputs
+    residuals = []
+    ##############################
+    #     Downsampling part      #
+    ##############################
+    
+    for i in range(n_stages):
+        n_conv = _get_var(n_conv_per_stage, i)
+        for j in range(n_conv):
+            if j == n_conv - 1 and not pool_type: residuals.append(x)
+            
+            x = conv_fn(
+                x,
+                filters     = _get_var(_get_var(filters, i), j),
+                kernel_size = _get_var(_get_var(kernel_size, i), j),
+                strides     = 1 if j < n_conv - 1 else _get_var(strides, i),
+                use_bias    = _get_var(_get_var(use_bias, i), j),
+                padding     = 'same',
+
+                activation  = _get_var(_get_var(activation, i), j),
+
+                bnorm       = _get_var(_get_var(bnorm, i), j),
+                drop_rate   = 0. if pool_type else _get_var(drop_rate, i),
+
+                bn_name = 'down_bn{}{}'.format(i + 1, '' if n_conv == 1 else '-{}'.format(j + 1)),
+                name    = 'down_conv{}{}'.format(i + 1, '' if n_conv == 1 else '-{}'.format(j + 1))
+            )
+
+        if pool_type:
+            residuals.append(x)
+            x = pool_fn(
+                pool_size = _get_var(pool_strides, i), strides = _get_var(pool_strides, i)
+            )(x)
+
+            if _get_var(drop_rate, i) > 0:
+                x = tf.keras.layers.Dropout(_get_var(drop_rate, i))(x)
+    
+    ####################
+    #    Middle part   #
+    ####################
+    
+    for i in range(n_middle_stages):
+        n_conv = _get_var(n_middle_conv, i)
+        for j in range(n_conv):
+            x = conv_fn(
+                x,
+                filters     = _get_var(_get_var(middle_filters, i), j),
+                kernel_size = _get_var(_get_var(middle_kernel_size, i), j),
+                use_bias    = _get_var(_get_var(middle_use_bias, i), j),
+                strides     = 1,
+                padding     = 'same',
+
+                activation  = _get_var(_get_var(middle_activation, i), j),
+
+                bnorm       = _get_var(_get_var(middle_bnorm, i), j),
+                drop_rate   = _get_var(_get_var(middle_drop_rate, i), j),
+
+                bn_name = 'middle_bn{}{}'.format(i + 1, '' if n_conv == 1 else '-{}'.format(j + 1)),
+                name    = 'middle_conv{}{}'.format(i + 1, '' if n_conv == 1 else '-{}'.format(j + 1))
+            )
+
+    ####################
+    # Upsampling part  #
+    ####################
+    
+    for i in reversed(range(n_stages)):
+        x = upsample_fn(
+            x,
+            filters     = _get_var(filters, i),
+            kernel_size = 1 + (_get_var(pool_strides, i) if pool_type else _get_var(strides, i)),
+            strides     = _get_var(pool_strides, i) if pool_type else _get_var(strides, i),
+            padding     = 'same',
+            activation  = _get_var(upsampling_activation, i),
+            bnorm       = 'never',
+            drop_rate   = 0.,
+            name        = 'upsampling_{}'.format(i + 1)
+        )
+        concat_mode_i = _get_var(concat_mode, i)
+        if concat_mode_i is not None:
+            x = _get_concat_layer(concat_mode_i)([x, residuals[i]])
+        
+        n_conv = _get_var(kwargs.get('up_n_conv_per_stage', n_conv_per_stage), i)
+        for j in range(n_conv):
+            x = conv_fn(
+                x,
+                filters     = _get_var(_get_var(kwargs.get('up_filters', filters), i), j),
+                kernel_size = _get_var(_get_var(kwargs.get('up_kernel_size', kernel_size), i), j),
+                strides     = 1,
+                use_bias    = _get_var(_get_var(kwargs.get('up_use_bias', use_bias), i), j),
+                padding     = 'same',
+
+                activation  = _get_var(_get_var(kwargs.get('up_activation', activation), i), j),
+
+                bnorm       = _get_var(_get_var(kwargs.get('up_bnorm', bnorm), i), j),
+                drop_rate   = 0. if j < n_conv - 1 else _get_var(kwargs.get('up_drop_rate', drop_rate), i),
+
+                bn_name = 'up_bn{}{}'.format(i + 1, '' if n_conv == 1 else '-{}'.format(j + 1)),
+                name    = 'up_conv{}{}'.format(i + 1, '' if n_conv == 1 else '-{}'.format(j + 1))
+            )
+
+    ####################
+    #   Output part    #
+    ####################
+    
+    if isinstance(output_dim, (list, tuple)):
+        out = [out_layer(
+            filters     = out_dim_i,
+            kernel_size = 1,
+            strides     = 1,
+            name    = '{}_{}'.format(final_name, i + 1) if isinstance(final_name, str) else final_name[i]
+        )(x) for i, out_dim_i in enumerate(output_dim)]
+        out = [
+            get_activation(_get_var(final_activation, i), dtype = 'float32')(out_i) if _get_var(final_activation, i) else out_i
+            for out_i in out
+        ]
+    else:
+        out = out_layer(
+            output_dim, kernel_size = 1, strides = 1, name = final_name
+        )(x)
+        out = get_activation(final_activation, dtype = 'float32')(out)
     
     return tf.keras.Model(inputs = inputs, outputs = out, name = name)
 
 custom_functions    = {
-    'UNet'    : UNet
+    'UNet'    : UNet,
+    'VGGUNet'   : VGGUNet
 }

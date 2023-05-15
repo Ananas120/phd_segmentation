@@ -18,14 +18,16 @@
 ├── loggers
 ├── models
 │   ├── detection
-│   │   └── yolo.py         : main YOLO class
+│   │   ├── east.py         : main EAST class (rotated bounding box segmentation)
+│   │   └── yolo.py         : main YOLO class (object detection)
 ├── pretrained_models
 │   └── yolo_backend        : directory where to save the yolo_backend weights
 ├── unitest
 ├── utils
 ├── detection.ipynb
 ├── example_yolo.ipynb
-└── example_yolo_generator.ipynb```
+└── example_yolo_generator.ipynb
+```
 
 Check [the main project](https://github.com/yui-mhcp/base_dl_project) for more information about the unextended modules / structure / main classes. 
 
@@ -47,6 +49,7 @@ You can check the `detection` notebook for a concrete demonstration
 Available architectures : 
 - `detection` :
     - [YOLOv2](https://pjreddie.com/darknet/yolov2/)
+    - (**experimental**) [EAST](https://arxiv.org/abs/1704.03155)
 
 ### Model weights
 
@@ -78,13 +81,13 @@ You can download `pretrained backend` at [this link](https://drive.google.com/dr
 - [ ] Improve the face detection model
 - [ ] Add more detection models
 - [ ] Add support for `YOLOv3` and `YOLOv4` models
-- [ ] Add segmentation models (such as `U-Net`)
+- [x] Add segmentation models (such as `U-Net`)
 - [x] Add `producer-consumer` based prediction / streaming
 - [x] Automatically downloads the official pretrained weights if not loaded
 
 ## Difference between `detection` and `segmentation`
 
-Main methodologies in *object detection* in image are `detection` with `bounding boxes` and `pixel-wise segmentation`. These 2 approaches tends to detect position of objects in an image but with different level of precision. This difference has an impact on the model architecture as the required output shape is not thesame. 
+The main methodologies in *object detection* in image are `detection` with `bounding boxes` and `pixel-wise segmentation`. These 2 approaches tends to detect position of objects in an image but with different level of precision. This difference has an impact on the model architecture as the required output shape is not thesame. 
 
 Here is a comparison of both approaches based on some criteria :
 
@@ -100,12 +103,6 @@ Here is a comparison of both approaches based on some criteria :
 | Support multi-label classification    | yes, by design        | I guess yes but not its main application  |
 
 \* This is the classical output shape of `YOLO` models. The last dimension is `[x, y, w, h, confidence, * class_score]`
-
-## Pipeline-based prediction
-
-The `YOLO` model supports the pipeline-based prediction, meaning that all the tasks you see in the below graph are multi-threaded. Check the [data_processing project](https://github.com/yui-mhcp/data_processing) for a better understanding of the `producer-consumer` framework. 
-
-![Detection pipeline](detection_pipeline.jpg)
 
 ## Contacts and licence
 
@@ -143,8 +140,10 @@ Papers and tutorials :
 - [4] [Gentle guide on how YOLO object detection works](https://hackernoon.com/gentle-guide-on-how-yolo-object-localization-works-with-keras-part-1-aec99277f56f) : good tutorial explaning the image detection mechanism
 - [5] [U-Net: Convolutional Networks for Biomedical Image Segmentation](https://arxiv.org/abs/1505.04597) : U-net original paper
 - [6] [image segmentation tutorials](https://www.tensorflow.org/tutorials/images/segmentation) : U-net implementation in tensorflow + image segmentation tutorial
+- [7] [EAST: An Efficient and Accurate Scene Text Detector](https://arxiv.org/abs/1704.03155) : text detection (with possibly rotated bounding-boxes) with a segmentation model (U-Net). 
 
 Datasets :
 - [COCO](https://cocodataset.org/#home) dataset : 80 labels dataset for object detection in real context
+- [COCO Text](https://vision.cornell.edu/se3/coco-text-2/) dataset : an extension of COCO for text detection
 - [Wider Face](http://shuoyang1213.me/WIDERFACE/) dataset : face detection dataset
 - [kangaroo](https://github.com/experiencor/kangaroo) dataset : funny tiny dataset to train fast a powerful model (fun to have fast results)
