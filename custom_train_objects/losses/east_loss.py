@@ -17,7 +17,7 @@ from custom_train_objects.losses.dice_loss import dice_coeff
 
 class EASTLoss(tf.keras.losses.Loss):
     def __init__(self,
-                 score_factor    = 1.,
+                 score_factor   = 1.,
                  rbox_factor    = 1.,
                  theta_factor   = 10.,
                  
@@ -55,6 +55,9 @@ class EASTLoss(tf.keras.losses.Loss):
         )
     
     def geo_loss(self, y_true, y_pred, mask):
+        true_d0, true_d1, true_d2, true_d3 = (
+            y_true[..., 0], y_true[..., 1], y_true[..., 2], y_true[..., 3]
+        )
         pred_d0, pred_d1, pred_d2, pred_d3 = (
             y_pred[..., 0], y_pred[..., 1], y_pred[..., 2], y_pred[..., 3]
         )
@@ -68,11 +71,11 @@ class EASTLoss(tf.keras.losses.Loss):
             pred_d2 = pred_d2 * height
             pred_d3 = pred_d3 * width
         
-        true_area   = (y_true[..., 0] + y_true[..., 2]) * (y_true[..., 1] + y_true[..., 3])
+        true_area   = (true_d0 + true_d2) * (true_d1 + true_d3)
         pred_area   = (pred_d0 + pred_d2) * (pred_d1 + pred_d3)
 
-        h_union = tf.minimum(y_true[..., 0], pred_d0) + tf.minimum(y_true[..., 2], pred_d2)
-        w_union = tf.minimum(y_true[..., 1], pred_d1) + tf.minimum(y_true[..., 3], pred_d3)
+        h_union = tf.minimum(true_d0, pred_d0) + tf.minimum(true_d2, pred_d2)
+        w_union = tf.minimum(true_d1, pred_d1) + tf.minimum(true_d3, pred_d3)
         
         intersect   = w_union * h_union
         union       = true_area + pred_area - intersect
@@ -98,16 +101,16 @@ class EASTLoss(tf.keras.losses.Loss):
         return theta_loss * mask
     
     def call(self, y_true, y_pred):
-        true_score_map, true_geo_map, valid_mask = y_true
-        pred_score_map, pred_geo_map = y_pred
+        true_score_map, true_geo_map, valid_mask     = y_true
+        pred_score_map, pred_geo_map, pred_theta_map = y_pred
         
         if len(tf.shape(true_score_map)) == 3:
-            true_score_map = tf.expand_dims(true_score_map, axis = -1)
+            pred_score_map = tf.squeeze(pred_score_map, axis = -1)
         
         batch_size  = tf.shape(true_score_map)[0]
         
-        true_score_map  = tf.where(tf.expand_dims(valid_mask, axis = -1), true_score_map, 0.)
-        pred_score_map  = tf.where(tf.expand_dims(valid_mask, axis = -1), pred_score_map, 0.)
+        true_score_map  = tf.where(valid_mask, true_score_map, 0.)
+        pred_score_map  = tf.where(valid_mask, pred_score_map, 0.)
 
         n_valid     = tf.maximum(tf.reduce_sum(tf.reshape(
             true_score_map, [batch_size, -1]
@@ -115,10 +118,10 @@ class EASTLoss(tf.keras.losses.Loss):
 
         score_loss  = self.score_loss(true_score_map, pred_score_map)
         geo_loss    = self.geo_loss(
-            true_geo_map[..., :4], pred_geo_map[..., :4], true_score_map[..., 0]
+            true_geo_map[..., :4], pred_geo_map, true_score_map
         )
         theta_loss  = self.theta_loss(
-            true_geo_map[..., 4], pred_geo_map[..., 4], true_score_map[..., 0]
+            true_geo_map[..., 4], pred_theta_map[..., 0], true_score_map
         )
         
         score_loss  = score_loss * self.score_factor
@@ -126,7 +129,7 @@ class EASTLoss(tf.keras.losses.Loss):
             tf.reshape(geo_loss, [batch_size, -1]), axis = -1
         ) * self.rbox_factor / n_valid
         theta_loss  = tf.reduce_sum(
-            tf.reshape(theta_loss, [batch_size, - 1]), axis = -1
+            tf.reshape(theta_loss, [batch_size, -1]), axis = -1
         ) * self.theta_factor / n_valid
         
         loss    = score_loss + geo_loss + theta_loss

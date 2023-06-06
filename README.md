@@ -2,23 +2,29 @@
 
 **NEW : [CHANGELOG](https://github.com/yui-mhcp/yui-mhcp/blob/main/CHANGELOG.md) file ! Check it to have a global overview of the latest modifications !** :yum:
 
+**WARNING** : the EAST training procedure is not implemented yet for the current post-processing pipeline inspired from [this repo](https://github.com/SakuraRiven/EAST). It can still be used by using the available pretrained weights !
+
 ## Project structure
 
 ```bash
 ├── custom_architectures
-│   └── yolo_arch.py            : defines the YOLOv2 architecture
+│   ├── unet_arch.py        : defines variants of the UNet architectures (with multiple backbones)
+│   └── yolo_arch.py        : defines the YOLOv2 architecture
 ├── custom_layers
 ├── custom_train_objects
 │   ├── generators
 │   │   └── yolo_generator.py   : generator class for YOLO data (must be cleaned and updated)
 │   ├── losses
+│   │   ├── dice_loss.py        : main DiceLoss class (used in the EASTLoss)
+│   │   ├── east_loss.py        : main EASTLoss class
 │   │   └── yolo_loss.py        : main YOLOLoss class
 ├── datasets
 ├── hparams
 ├── loggers
 ├── models
 │   ├── detection
-│   │   ├── east.py         : main EAST class (rotated bounding box segmentation)
+│   │   ├── base_detector.py    : abstract class for object detection models
+│   │   ├── east.py         : main EAST class (rotated bounding box detection based on U-Net model)
 │   │   └── yolo.py         : main YOLO class (object detection)
 ├── pretrained_models
 │   └── yolo_backend        : directory where to save the yolo_backend weights
@@ -61,9 +67,11 @@ Available architectures :
 
 Models must be unzipped in the `pretrained_models/` directory !
 
-**Important Note** : the official pretrained model is available as a `yolov2.weights` file. You can find how to create a `YOLO` pretrained model based on these weights in the `detection` notebook.
+**Important Note** : the official YOLOv2 pretrained model is available as a `yolov2.weights` file. You can find how to create a `YOLO` pretrained model based on these weights in the `detection` notebook.
 
-You can download `pretrained backend` at [this link](https://drive.google.com/drive/folders/1lv0s8IAg1AWiiGq7o3H13TJnjp0K9Nh8?usp=sharing). 
+`pretrained backend` for YOLO can be downloaded at [this link](https://drive.google.com/drive/folders/1lv0s8IAg1AWiiGq7o3H13TJnjp0K9Nh8?usp=sharing). 
+
+The pretrained version of EAST can be downloaded [from this project](https://github.com/SakuraRiven/EAST). It should be set in `pretrained_models/pretrained_weights/east_vgg16.pth` (`torch` is required to transfer the weights : `pip install torch`).
 
 ## Installation and usage
 
@@ -71,6 +79,8 @@ You can download `pretrained backend` at [this link](https://drive.google.com/dr
 2. Go to the root of this repository : `cd detection`
 3. Install requirements : `pip install -r requirements.txt`
 4. Open `detection` notebook and follow the instructions !
+
+**Important Note** : some *heavy* requirements are removed in order to avoid unnecessary installation of such packages (e.g. `torch` and `transformers`), as they are used only in very specific functions.  It is therefore possible that some `ImportError` occurs when using specific functions, such as `TextEncoder.from_transformers_pretrained(...)`. 
 
 ## TO-DO list :
 
@@ -87,7 +97,7 @@ You can download `pretrained backend` at [this link](https://drive.google.com/dr
 
 ## Difference between `detection` and `segmentation`
 
-The main methodologies in *object detection* in image are `detection` with `bounding boxes` and `pixel-wise segmentation`. These 2 approaches tends to detect position of objects in an image but with different level of precision. This difference has an impact on the model architecture as the required output shape is not thesame. 
+The 2 main methodologies in *object detection* are `detection` with `bounding boxes` and `pixel-wise segmentation`. These 2 approaches tends to detect position of objects in an image but with different level of precision. This difference has an impact on the model architecture as the required output shape is not thesame. 
 
 Here is a comparison of both approaches based on some criteria :
 
@@ -131,16 +141,19 @@ If you use this project in your work, please add this citation to give it more v
 
 ## Notes and references
 
-The code for this project is highly inspired from this repo :
+The code for the YOLO part of this project is highly inspired from this repo :
 - [1] [experiencor's repository](https://github.com/experiencor/keras-yolo2) : tensorflow 1.x implementation of `YOLOv2` (main inspiration for this repository)
+The code for the EAST part of this project is highly inspired from this repo :
+- [2] [SakuraRiven pytorch implementation](https://github.com/SakuraRiven/EAST) : pytorch implementation of the EAST paper.
+
 
 Papers and tutorials :
-- [2] [YOLO9000 : better, stronger, faster](https://arxiv.org/abs/1612.08242v1) : the original YOLOv2 paper
-- [3] [darknet's website](https://pjreddie.com/darknet/yolov2/) : the official releases of YOLOv2
-- [4] [Gentle guide on how YOLO object detection works](https://hackernoon.com/gentle-guide-on-how-yolo-object-localization-works-with-keras-part-1-aec99277f56f) : good tutorial explaning the image detection mechanism
-- [5] [U-Net: Convolutional Networks for Biomedical Image Segmentation](https://arxiv.org/abs/1505.04597) : U-net original paper
-- [6] [image segmentation tutorials](https://www.tensorflow.org/tutorials/images/segmentation) : U-net implementation in tensorflow + image segmentation tutorial
-- [7] [EAST: An Efficient and Accurate Scene Text Detector](https://arxiv.org/abs/1704.03155) : text detection (with possibly rotated bounding-boxes) with a segmentation model (U-Net). 
+- [3] [YOLO9000 : better, stronger, faster](https://arxiv.org/abs/1612.08242v1) : the original YOLOv2 paper
+- [4] [darknet's website](https://pjreddie.com/darknet/yolov2/) : the official releases of YOLOv2
+- [5] [Gentle guide on how YOLO object detection works](https://hackernoon.com/gentle-guide-on-how-yolo-object-localization-works-with-keras-part-1-aec99277f56f) : good tutorial explaning the image detection mechanism
+- [6] [U-Net: Convolutional Networks for Biomedical Image Segmentation](https://arxiv.org/abs/1505.04597) : U-net original paper
+- [7] [image segmentation tutorials](https://www.tensorflow.org/tutorials/images/segmentation) : U-net implementation in tensorflow + image segmentation tutorial
+- [8] [EAST: An Efficient and Accurate Scene Text Detector](https://arxiv.org/abs/1704.03155) : text detection (with possibly rotated bounding-boxes) with a segmentation model (U-Net). 
 
 Datasets :
 - [COCO](https://cocodataset.org/#home) dataset : 80 labels dataset for object detection in real context

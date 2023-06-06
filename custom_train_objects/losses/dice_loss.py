@@ -13,6 +13,7 @@
 
 import tensorflow as tf
 
+from custom_train_objects.losses.ge2e_seg_loss import average_loss
 
 @tf.function(input_signature = [
     tf.SparseTensorSpec(shape = (None, None, None), dtype = tf.float32),
@@ -90,13 +91,26 @@ def dice_coeff(y_true, y_pred, smoothing = 0.01, skip_empty = False):
     return dice_coeff
 
 class DiceLoss(tf.keras.losses.Loss):
-    def __init__(self, smoothing = 0.01, reduction = 'none', from_logits = False, skip_empty_frames = False, skip_empty_labels = False, name = 'DiceLoss', ** kwargs):
+    def __init__(self,
+                 smoothing  = 0.01,
+                 from_logits    = False,
+                 skip_empty_frames  = False,
+                 skip_empty_labels  = False,
+                 
+                 reduction  = 'none',
+                 name   = 'DiceLoss',
+                 ** kwargs
+                ):
         super().__init__(name = name, reduction = 'none', ** kwargs)
         self.smoothing  = tf.cast(smoothing, tf.float32)
+        self.from_logits    = from_logits
         
-        self.from_logits       = from_logits
-        self.skip_empty_labels = tf.Variable(skip_empty_labels, trainable = False, dtype = tf.bool, name = 'skip_empty_labels')
-        self.skip_empty_frames = tf.Variable(skip_empty_frames, trainable = False, dtype = tf.bool, name = 'skip_empty_frames')
+        self.skip_empty_labels = tf.Variable(
+            skip_empty_labels, trainable = False, dtype = tf.bool, name = 'skip_empty_labels'
+        )
+        self.skip_empty_frames = tf.Variable(
+            skip_empty_frames, trainable = False, dtype = tf.bool, name = 'skip_empty_frames'
+        )
     
     @property
     def metric_names(self):
@@ -106,6 +120,7 @@ class DiceLoss(tf.keras.losses.Loss):
         if skip_empty_frames is None: skip_empty_frames = self.skip_empty_frames
         if skip_empty_labels is None: skip_empty_labels = self.skip_empty_labels
         
+        is_sparse   = isinstance(y_true, tf.sparse.SparseTensor)
         batch_size, n_classes = tf.shape(y_pred)[0], tf.shape(y_pred)[-1]
         
         y_true = tf.cast(y_true, tf.float32)
@@ -114,18 +129,20 @@ class DiceLoss(tf.keras.losses.Loss):
         if self.from_logits: y_pred = tf.nn.sigmoid(y_pred)
 
         if skip_empty_frames and len(tf.shape(y_pred)) == 5:
-            if isinstance(y_true, tf.sparse.SparseTensor):
+            if is_sparse:
                 y_true = tf.sparse.reshape(y_true, [batch_size, -1, tf.shape(y_pred)[-2], n_classes])
                 valid_frames = tf.sparse.reduce_sum(y_true, axis = 1, keepdims = True) > 0
             else:
                 y_true = tf.reshape(y_true, [batch_size, -1, tf.shape(y_pred)[-2], n_classes])
                 valid_frames = tf.reduce_sum(y_true, axis = 1, keepdims = True) > 0
             
+            # shape (after expand_dims) == [batch_size, 1, 1, n_frames, n_classes]
+            # values equal 1 iff at least one voxel in this batch, in this frame and in this label is non-zero
             valid_frames.set_shape([None, None, None, None])
             valid_frames = tf.expand_dims(valid_frames, axis = 2)
             y_pred = y_pred * tf.cast(valid_frames, y_pred.dtype)
 
-        if isinstance(y_true, tf.sparse.SparseTensor):
+        if is_sparse:
             y_true = tf.sparse.reshape(y_true, [batch_size, -1, n_classes])
             dice_coeff_fn = sparse_dice_coeff
         else:
@@ -195,32 +212,67 @@ class DiceWithBCELoss(DiceLoss):
         return config
     
 class DiceWithCELoss(DiceLoss):
-    def __init__(self, dice_weight = 0.5, bce_weight = 0.5, ** kwargs):
+    def __init__(self,
+                 dice_weight    = 0.5,
+                 ce_weight      = 0.5,
+                 loss_averaging = 'macro',
+                 
+                 bce_weight     = None,
+                 
+                 ** kwargs
+                ):
         super().__init__(** kwargs)
+        self.loss_averaging = loss_averaging
         
-        self.dice_weight = tf.Variable(dice_weight, trainable = False, dtype = tf.float32, name = 'dice_weight')
-        self.bce_weight  = tf.Variable(bce_weight,  trainable = False, dtype = tf.float32, name = 'bce_weight')
+        if bce_weight is not None: ce_weight = bce_weight
+        
+        self.dice_weight = tf.Variable(
+            dice_weight, trainable = False, dtype = tf.float32, name = 'dice_weight'
+        )
+        self.ce_weight   = tf.Variable(
+            ce_weight,  trainable = False, dtype = tf.float32, name = 'ce_weight'
+        )
     
     @property
     def metric_names(self):
-        return ['loss', 'dice', 'bce']
+        return ['loss', 'dice_loss', 'cross_entropy_loss']
     
     def call(self, y_true, y_pred, ** kwargs):
-        dice_loss = tf.zeros((tf.shape(y_pred)[0], ), dtype = tf.float32)
-        ce_loss   = tf.zeros((tf.shape(y_pred)[0], ), dtype = tf.float32)
-        
-        batch_size = tf.shape(y_pred)[0]
+        batch_size  = tf.shape(y_pred)[0]
+        dice_loss   = tf.zeros((batch_size, ), dtype = tf.float32)
+        ce_loss     = tf.zeros((batch_size, ), dtype = tf.float32)
         
         y_true = tf.cast(y_true, tf.float32)
         if self.dice_weight > 0.:
             dice_loss = super().call(y_true, y_pred, ** kwargs)[0] * self.dice_weight
         
-        if self.bce_weight > 0.:
-            if isinstance(y_true, tf.sparse.SparseTensor): y_true = tf.argmax(tf.sparse.to_dense(y_true), axis = -1)
-            ce_loss = tf.reduce_mean(tf.keras.losses.sparse_categorical_crossentropy(
-                tf.reshape(y_true, [batch_size, -1]), tf.reshape(y_pred, [batch_size, -1, tf.shape(y_pred)[-1]]),
+        if self.ce_weight > 0.:
+            if isinstance(y_true, tf.sparse.SparseTensor):
+                y_true = tf.tensor_scatter_nd_update(
+                    tf.zeros(y_true.dense_shape[:-1], dtype = tf.int32),
+                    y_true.indices[:, :-1],
+                    tf.cast(y_true.indices[:, -1], tf.int32)
+                )
+            ce_loss = tf.keras.losses.sparse_categorical_crossentropy(
+                tf.reshape(y_true, [batch_size, -1]),
+                tf.reshape(y_pred, [batch_size, -1, tf.shape(y_pred)[-1]]),
                 from_logits = self.from_logits
-            ), axis = -1) * self.bce_weight
+            )
+            
+            if batch_size == 1:
+                batch_indexes = tf.zeros((tf.shape(ce_loss)[1], ), dtype = tf.int32)
+            else:
+                batch_indexes = tf.repeat(
+                    tf.range(batch_size, dtype = tf.int32), tf.shape(ce_loss)[1]
+                )
+            
+            ce_loss = average_loss(
+                tf.reshape(ce_loss, [-1]),
+                ids = tf.reshape(y_true, [-1]),
+                mode    = self.loss_averaging,
+                batch_size  = batch_size,
+                batch_idx   = batch_indexes
+            ) * self.ce_weight
         
         return dice_loss + ce_loss, dice_loss, ce_loss
 
@@ -228,6 +280,7 @@ class DiceWithCELoss(DiceLoss):
         config = super().get_config()
         config.update({
             'dice_weight' : self.dice_weight.value(),
-            'bce_weight'  : self.bce_weight.value()
+            'bce_weight'  : self.ce_weight.value(),
+            'loss_averaging'    : self.loss_averaging
         })
         return config

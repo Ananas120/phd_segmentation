@@ -20,7 +20,31 @@ def l2_normalize(x, axis = -1):
     import tensorflow as tf
     return tf.math.l2_normalize(x, axis = axis)
 
-def ConvBlock(x, filters, kernel_size = 3, strides = 1, padding = 'same', n = 2, drop_rate = 0.25, name = None, duplicate_i = True, manual_padding = True):
+def ConvBlock(x,
+              filters,
+              kernel_size = 3,
+              strides     = 1,
+              padding     = 'same',
+              
+              epsilon   = 1e-5,
+              norm_type = 'instance',
+              drop_rate = 0.25,
+              
+              duplicate_i    = True,
+              manual_padding = True,
+              
+              n    = 2,
+              name = None
+             ):
+    if norm_type == 'instance':
+        norm_layer = tfa.layers.InstanceNormalization
+    elif norm_type == 'layer':
+        norm_layer = tf.keras.layers.LayerNormalization
+    elif norm_type == 'batch':
+        norm_layer = tf.keras.layers.BatchNormalization
+    else:
+        norm_layer = None
+    
     for i in range(n):
         padding_i = padding
         if kernel_size >= 3 and padding == 'same' and manual_padding:
@@ -36,7 +60,7 @@ def ConvBlock(x, filters, kernel_size = 3, strides = 1, padding = 'same', n = 2,
             norm_name = '{}/blocks/{}/norm'.format(name, i, i) if name else None
         
         x = tf.keras.layers.Conv3D(filters, kernel_size, strides = strides if i == 0 else 1, padding = padding_i, name = conv_name)(x)
-        x = tfa.layers.InstanceNormalization(epsilon = 1e-5, name = norm_name)(x)
+        if norm_layer is not None: x = norm_layer(epsilon = epsilon, name = norm_name)(x)
         x = tf.keras.layers.LeakyReLU(0.01)(x)
         
         if drop_rate:
@@ -47,6 +71,7 @@ def ConvBlock(x, filters, kernel_size = 3, strides = 1, padding = 'same', n = 2,
 def TotalSegmentator(input_shape    = (None, None, None, 1),
                      output_dim     = 104,
                      normalize_output = False,
+                     norm_type      = 'instance',
          
                      n_stages       = 6,
                      n_conv_per_stage   = 2,
@@ -93,6 +118,7 @@ def TotalSegmentator(input_shape    = (None, None, None, 1),
             filters     = _get_var(filters, i),
             kernel_size = _get_var(kernel_size, i),
             strides     = _get_var(strides, i),
+            norm_type   = _get_var(norm_type, i),
             drop_rate   = _get_var(drop_rate, i),
             name        = 'conv_blocks_context/{}'.format(i),
             duplicate_i = False if i < n_stages - 1 else True,
@@ -127,6 +153,7 @@ def TotalSegmentator(input_shape    = (None, None, None, 1),
             filters     = _get_var(filters, n_stages - i - 2),
             kernel_size = _get_var(kernel_size, n_stages - i - 2),
             strides     = 1,
+            norm_type   = _get_var(norm_type, n_stages - i - 2),
             manual_padding = manual_padding,
             drop_rate   = _get_var(drop_rate, i),
             name        = 'conv_blocks_localization/{}'.format(i)

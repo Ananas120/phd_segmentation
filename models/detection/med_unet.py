@@ -14,19 +14,19 @@ import numpy as np
 import pandas as pd
 import tensorflow as tf
 
-from tensorflow.keras.layers import *
-
 from loggers import timer
 from utils.med_utils import *
 from utils import convert_to_str
 from models.interfaces.base_image_model import BaseImageModel
 
-def pad_to_multiple(data, multiple, axis):
-    if not isinstance(axis, (list, tuple)): axis = [axis]
-    return tf.pad(
-        data, [(0, (multiple - data.shape[i] % multiple) if i in axis else 0) for i in range(len(data.shape))]
-    )
-
+def _parse_data(data):
+    filename, start, end = data, -1, -1
+    if isinstance(data, (dict, pd.Series)):
+        if 'start_frame' in data: start = data['start_frame']
+        if 'end_frame' in data:   end = data['end_frame']
+        filename = data['filename'] if 'filename' in data else data['images']
+    return filename, start, end
+    
 class MedUNet(BaseImageModel):
     def __init__(self,
                  labels,
@@ -36,6 +36,8 @@ class MedUNet(BaseImageModel):
                  
                  nb_class      = None,
                  pad_value     = None,
+                 
+                 mapping       = None,
                  
                  ** kwargs
                 ):
@@ -53,17 +55,25 @@ class MedUNet(BaseImageModel):
             self.nb_class = max(1, nb_class if nb_class is not None else len(self.labels))
             if self.nb_class > len(self.labels):
                 self.labels += [''] * (self.nb_class - len(self.labels))
-
-        self._downsampling_factor = -1
+        
+        self.mapping = build_mapping(self.labels, mapping)
         
         super().__init__(** kwargs)
-
-    @property
-    def output_signature(self):
-        raise NotImplementedError()
     
     def get_output(self, data, ** kwargs):
-        raise NotImplementedError()
+        if self.nb_class == 1:
+            shape = [None, None, None] if self.is_3d else [None, None]
+        else:
+            shape = [None, None, None, None] if self.is_3d else [None, None, None]
+
+        mask = tf.py_function(
+            self.get_output_fn, [data['segmentation'], data['label']], Tout = tf.SparseTensorSpec(shape = shape, dtype = tf.uint8)
+        )
+        mask.indices.set_shape([None, len(shape)])
+        mask.values.set_shape([None])
+        mask.dense_shape.set_shape([len(shape)])
+        
+        return mask
 
     def _build_model(self, final_activation, architecture = 'totalsegmentator', ** kwargs):
         super()._build_model(model = {
@@ -83,16 +93,6 @@ class MedUNet(BaseImageModel):
         return False if self.n_frames == 1 else True
 
     @property
-    def downsampling_factor(self):
-        if self._downsampling_factor == -1:
-            downsampling_factor = 1
-            for l in self.model.layers:
-                if type(l) in (Conv2D, Conv3D, MaxPooling2D, MaxPooling3D):
-                    downsampling_factor *= l.strides[0]
-            self._downsampling_factor = downsampling_factor
-        return self._downsampling_factor
-
-    @property
     def input_shape(self):
         return self.input_size if not self.is_3d else self.input_size[:2] + (self.n_frames, self.input_size[2])
     
@@ -100,12 +100,22 @@ class MedUNet(BaseImageModel):
     def last_dim(self):
         if self.nb_class is None:
             raise NotImplementedError('If `self.nb_class is None`, you must redefine this property')
-        return 1 if self.nb_class == 1 else self.nb_class
+        return self.nb_class
+    
+    @property
+    def last_output_dim(self):
+        return self.last_dim
     
     @property
     def input_signature(self):
         return tf.TensorSpec(
             shape = (None, ) + self.input_shape, dtype = tf.float32
+        )
+
+    @property
+    def output_signature(self):
+        return tf.SparseTensorSpec(
+            shape = (None, ) + self.input_shape[:-1] + (self.last_output_dim, ), dtype = tf.uint8
         )
 
     @property
@@ -116,7 +126,7 @@ class MedUNet(BaseImageModel):
             max_frames = -1,
             crop_mode  = ['center', 'center', 'random'],
             skip_empty_frames = False,
-            skip_empty_labels = False
+            skip_empty_labels = True
         )
     
     @property
@@ -139,9 +149,6 @@ class MedUNet(BaseImageModel):
             des += "- # frames : {}\n".format(self.n_frames if self.n_frames else 'variable')
         return des
     
-    def pad_to_multiple(self, data, axis = [1, 2]):
-        return pad_to_multiple(data, self.downsampling_factor, axis)
-        
     def infer(self, data : tf.Tensor, win_len : tf.Tensor = -1, hop_len : tf.Tensor = -1):
         if self.is_3d:
             if win_len == -1: win_len = self.max_frames if self.max_frames is not None else tf.shape(images)[-2]
@@ -225,32 +232,39 @@ class MedUNet(BaseImageModel):
         
         return self(image, training = training)
 
-    def preprocess_image(self, image, voxel_dims, mask = None, ** kwargs):
-        max_h = self.input_size[0] if self.input_size[0] is not None else self.max_size[0]
-        max_w = self.input_size[1] if self.input_size[1] is not None else self.max_size[1]
+    def preprocess_image(self, image, voxel_dims, mask = None, resize_to_multiple = True, ** kwargs):
+        if tf.reduce_any(tf.shape(image) == 0):
+            return image if mask is None else (image, mask)
         
-        if max_h is None or max_h <= 0: max_h = tf.shape(image)[0]
-        if max_w is None or max_w <= 0: max_w = tf.shape(image)[1]
-
         if self.is_3d:
-            n_frames = self.n_frames if self.n_frames is not None else self.max_frames
-            if n_frames <= 0: n_frames = tf.shape(image)[-2]
-            target_shape = (
-                max_h, max_w, n_frames, self.input_size[2]
-            )
+            tar_shape = (self.input_size[0], self.input_size[1], self.n_frames)
+            max_shape = self.max_size + (self.max_frames, )
         else:
-            target_shape = (max_h, max_w, self.input_size[2])
-        
+            tar_shape = self.input_size[:2]
+            max_shape = self.max_size
+
+        tar_shape = [s if s is not None and  s > 0 else -1 for s in tar_shape]
+        max_shape = [s if s is not None and  s > 0 else -1 for s in max_shape]
+
         #tf.print('target_shape', target_shape)
         normalized = crop_then_reshape(
-            image, voxel_dims, target_shape = target_shape, target_voxel_dims = self.voxel_dims,
-            mask = mask, crop_mode = self.crop_mode, pad_value = self.pad_value
+            image,
+            mask = mask,
+            voxel_dims   = voxel_dims,
+            target_voxel_dims = self.voxel_dims,
+            
+            max_shape      = max_shape,
+            target_shape   = tar_shape,
+            multiple_shape = self.downsampling_factor if resize_to_multiple else None,
+            
+            crop_mode    = self.crop_mode,
+            pad_value    = self.pad_value
         )
         if mask is not None:
             normalized, mask = normalized
             if isinstance(self.output_signature, tf.SparseTensorSpec):
                 if tf.reduce_any(tf.reduce_max(mask.indices, axis = 0) >= tf.expand_dims(tf.cast(tf.shape(mask), tf.int64), 0)):
-                    tf.print(tf.shape(mask), tf.reduce_max(mask.indices, axis = 0), target_shape)
+                    tf.print(tf.shape(mask), tf.reduce_max(mask.indices, axis = 0), tar_shape, max_shape)
                 if not isinstance(mask, tf.sparse.SparseTensor): mask = tf.sparse.from_dense(mask)
             elif isinstance(mask, tf.sparse.SparseTensor):
                 mask = tf.sparse.to_dense(mask)
@@ -260,29 +274,25 @@ class MedUNet(BaseImageModel):
 
         return (normalized, mask) if mask is not None else normalized
     
-    def get_input_fn(self, filename, ** kwargs):
-        if isinstance(filename, np.ndarray) and filename.shape == (): filename = filename.item()
-        if isinstance(filename, bytes): filename = filename.decode('utf-8')
-        
-        return load_medical_image(filename, ** kwargs)
+    def get_input_fn(self, filename, start_frame = -1, end_frame = -1, ** kwargs):
+        return load_medical_image(
+            convert_to_str(filename), start_frame = start_frame, end_frame = end_frame, ** kwargs
+        )
     
-    def get_output_fn(self, filename, file_labels = None, ** kwargs):
-        if isinstance(filename, tf.Tensor): filename = filename.numpy()
-        if isinstance(filename, np.ndarray) and filename.shape == (): filename = filename.item()
-        if isinstance(filename, bytes): filename = filename.decode('utf-8')
-        if file_labels is not None:
-            if isinstance(file_labels, tf.Tensor): file_labels = file_labels.numpy()
-            file_labels = [convert_to_str(label) for label in file_labels]
+    def get_output_fn(self, filename, file_labels = None, start_frame = -1, end_frame = -1, ** kwargs):
+        if file_labels is not None: file_labels = convert_to_str(file_labels)
+        filename = convert_to_str(filename)
         
-        if file_labels is not None and len(filename) == len(file_labels):
-            filename = {label : convert_to_str(file) for label, file in zip(file_labels, filename)}
+        if file_labels and len(filename) == len(file_labels):
+            filename = {label : file for label, file in zip(file_labels, filename)}
         
-        return load_medical_seg(filename, mask_labels = file_labels, labels = self.labels, ** kwargs)[0]
+        return load_medical_seg(
+            filename, mask_labels = file_labels, mapping = self.mapping,
+            start_frame = start_frame, end_frame = end_frame, ** kwargs
+        )[0]
 
     def get_input(self, data, normalize = True, ** kwargs):
-        filename = data
-        if isinstance(data, (dict, pd.Series)):
-            filename = data['filename'] if 'filename' in data else data['images']
+        filename, start, end = _parse_data(data)
         
         image, voxel_dims = tf.numpy_function(
             self.get_input_fn, [filename], Tout = [tf.float32, tf.float32]
@@ -294,19 +304,29 @@ class MedUNet(BaseImageModel):
         else:
             image.set_shape([None, None, None, None] if self.is_3d else [None, None, None])
         
-        voxel_dims.set_shape([3])
-        if normalize: image = self.preprocess_image(image, voxel_dims)
+        voxel_dims.set_shape([3] if self.is_3d else [2])
+        if normalize: image = self.preprocess_image(image, voxel_dims, ** kwargs)
         
         return image if normalize else (image, voxel_dims)
+    
+    def filter_input(self, image):
+        return tf.reduce_all(tf.shape(image) > 0)
+    
+    def filter_output(self, output):
+        return True if not isinstance(output, tf.sparse.SparseTensor) else tf.shape(output.indices)[0] > 0
     
     def augment_input(self, image, ** kwargs):
         return self.augment_image(image, clip = False)
     
     def encode_data(self, data):
-        (image, voxel_dims), mask = self.get_input(data, normalize = False), self.get_output(data)
+        image, voxel_dims = self.get_input(data, normalize = False)
+        mask              = self.get_output(data)
         
         return self.preprocess_image(image, voxel_dims, mask = mask)
     
+    def filter_data(self, image, output):
+        return tf.logical_and(self.filter_input(image), self.filter_output(output))
+
     def augment_data(self, image, output):
         return self.augment_input(image), output
     
@@ -318,6 +338,6 @@ class MedUNet(BaseImageModel):
             'n_frames'   : self.n_frames,
             'pad_value'  : self.pad_value,
             'labels'     : self.labels,
-            'nb_class'   : self.nb_class,
+            'nb_class'   : self.nb_class
         })
         return config

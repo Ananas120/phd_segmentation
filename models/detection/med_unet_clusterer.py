@@ -39,10 +39,8 @@ class MedUNetClusterer(MedUNet):
         return self.embedding_dim
     
     @property
-    def output_signature(self):
-        return tf.SparseTensorSpec(
-            shape = (None, ) + self.input_shape[:-1] + (None, ), dtype = tf.uint8
-        )
+    def last_output_dim(self):
+        return None
     
     def __str__(self):
         des = super().__str__()
@@ -54,22 +52,9 @@ class MedUNetClusterer(MedUNet):
         loss_config['distance_metric'] = self.distance_metric
         super().compile(loss = loss, loss_config = loss_config, ** kwargs)
     
-    def get_output(self, data, ** kwargs):
-        if self.nb_class == 1:
-            shape = [None, None, None] if self.is_3d else [None, None]
-        else:
-            shape = [None, None, None, None] if self.is_3d else [None, None, None]
-
-        mask = tf.py_function(
-            self.get_output_fn, [data['segmentation'], data['label']], Tout = tf.SparseTensorSpec(shape = shape, dtype = tf.uint8)
-        )
-        mask.indices.set_shape([None, len(shape)])
-        mask.values.set_shape([None])
-        mask.dense_shape.set_shape([len(shape)])
-        
-        return mask
-    
     def filter_data(self, inputs, output):
+        if tf.shape(output.indices)[0] == 0:
+            tf.print('Empty slice :', tf.shape(inputs), tf.shape(output), tf.shape(output.indices))
         return tf.shape(output.indices)[0] > 0
     
     def get_config(self, * args, ** kwargs):

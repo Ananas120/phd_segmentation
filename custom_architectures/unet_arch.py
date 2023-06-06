@@ -18,6 +18,119 @@ from custom_architectures.current_blocks import (
     _get_var, _get_concat_layer, Conv2DBN, Conv3DBN, Conv2DTransposeBN, Conv3DTransposeBN, SeparableConv3DBN
 )
 
+_default_vgg_layers =  [
+    64, 64, 'M', 128, 128, 'M', 256, 256, 256, 'M', 512, 512, 512, 'M', 512, 512, 512, 'M'
+]
+
+class UpSampling2DV1(tf.keras.layers.Layer):
+    def __init__(self, scale_factor = 2, interpolation = 'bilinear', align_corners = False, ** kwargs):
+        super().__init__(** kwargs)
+        self.scale_factor   = scale_factor
+        self.interpolation  = interpolation
+        self.align_corners  = align_corners
+        
+        if not isinstance(self.scale_factor, (list, tuple)):
+            self.scale_factor = (self.scale_factor, self.scale_factor)
+        
+    def call(self, x):
+        return tf.compat.v1.image.resize(
+            x,
+            size    = (tf.shape(x)[1] * self.scale_factor[0], tf.shape(x)[2] * self.scale_factor[1]),
+            method  = self.interpolation,
+            align_corners = self.align_corners
+        )
+    
+    def get_config(self):
+        config = super().get_config()
+        config.update({
+            'scale_factor'  : self.scale_factor,
+            'interpolation' : self.interpolation,
+            'align_corners' : self.align_corners
+        })
+        return config
+    
+    
+def VGGBNUNet(input_shape   = (None, None, 3),
+              output_dim    = None,
+              final_name    = None,
+              final_activation  = None,
+              
+              layers        = _default_vgg_layers,
+              batch_norm    = True,
+              epsilon   = 1e-5,
+              pretrained    = '{}/east_vgg16.pth',
+              name  = 'features'
+             ):
+    if not isinstance(input_shape, (list, tuple)): input_shape = (input_shape, input_shape, 3)
+    inputs = tf.keras.layers.Input(shape = input_shape, name = 'input_image')
+    
+    prefix = 'extractor/features'
+    
+    i = 0
+    x = inputs
+    residuals = []
+    for l in layers:
+        if l == 'M':
+            x = tf.keras.layers.MaxPooling2D(2, name = '{}/pool{}'.format(prefix, i))(x)
+            residuals.append(x)
+            i += 1
+            continue
+        
+        x = tf.keras.layers.ZeroPadding2D(((1, 1), (1, 1)), name = '{}/pad{}'.format(prefix, i))(x)
+        x = tf.keras.layers.Conv2D(
+            l, kernel_size = 3, name = '{}/conv{}'.format(prefix, i)
+        )(x)
+        if batch_norm:
+            x = tf.keras.layers.BatchNormalization(
+                epsilon = epsilon, name = '{}/norm{}'.format(prefix, i + 1)
+            )(x)
+        x = tf.keras.layers.ReLU(name = '{}/relu{}'.format(prefix, i + 2))(x)
+        
+        i += 2 if not batch_norm else 3
+    
+    residuals = residuals[1:-1]
+    
+    for i, res in enumerate(residuals[::-1]):
+        x = UpSampling2DV1(2, interpolation = 'bilinear', align_corners = True)(x)
+        x = tf.keras.layers.Concatenate()([x, res])
+        for j in range(2 if i < len(residuals) - 1 else 3):
+            idx = i * 2 + j + 1
+            if j > 0:
+                x = tf.keras.layers.ZeroPadding2D(
+                    ((1, 1), (1, 1)), name = 'merge/pad{}'.format(idx)
+                )(x)
+            x = tf.keras.layers.Conv2D(
+                128 // 2 ** i, kernel_size = 1 if j == 0 else 3, name = 'merge/conv{}'.format(idx)
+            )(x)
+            if batch_norm:
+                x = tf.keras.layers.BatchNormalization(
+                    epsilon = epsilon, name = 'merge/bn{}'.format(idx)
+                )(x)
+            x = tf.keras.layers.ReLU(name = 'merge/relu{}'.format(idx))(x)
+    
+    score   = tf.keras.layers.Conv2D(1, kernel_size = 1, name = 'output/conv1')(x)
+    score   = tf.keras.layers.Activation('sigmoid', dtype = 'float32')(score)
+    
+    pos = tf.keras.layers.Conv2D(4, kernel_size = 1, name = 'output/conv2')(x)
+    pos = tf.keras.layers.Activation('sigmoid', dtype = 'float32')(pos)
+
+    angle   = tf.keras.layers.Conv2D(1, kernel_size = 1, name = 'output/conv3')(x)
+    angle   = tf.keras.layers.Activation('sigmoid', dtype = 'float32')(angle)
+    
+    out     = [score, pos, angle]
+    model   = tf.keras.Model(inputs, out, name = name)
+    
+    if pretrained:
+        import torch
+        
+        from models.weights_converter import name_based_partial_transfer_learning
+        
+        if '{}' in pretrained: pretrained = pretrained.format('pretrained_models/pretrained_weights')
+        
+        name_based_partial_transfer_learning(model, torch.load(pretrained, map_location = 'cpu'))
+    
+    return model
+
 def VGGUNet(input_shape    = 512,
             output_dim     = 1,
          
@@ -348,5 +461,11 @@ def UNet(input_shape    = 512,
 
 custom_functions    = {
     'UNet'    : UNet,
-    'VGGUNet'   : VGGUNet
+    'VGGUNet'   : VGGUNet,
+    'VGGBNUNet' : VGGBNUNet
+}
+
+
+custom_objects  = {
+    'UpSampling2DV1'    : UpSampling2DV1
 }

@@ -24,12 +24,6 @@ class MedUNetSegmentator(MedUNet):
     
     def _build_model(self, * args, final_activation = None, ** kwargs):
         super()._build_model(* args, final_activation = final_activation, ** kwargs)
-
-    @property
-    def output_signature(self):
-        return tf.SparseTensorSpec(
-            shape = (None, ) + self.input_shape[:-1] + (self.last_dim, ), dtype = tf.uint8
-        )
     
     def infer(self, images : tf.Tensor, win_len : tf.Tensor = -1, hop_len : tf.Tensor = -1):
         return np.argmax(super().infer(images, win_len, hop_len), axis = -1)
@@ -67,21 +61,6 @@ class MedUNetSegmentator(MedUNet):
     def compile(self, loss = 'DiceLoss', loss_config = {}, ** kwargs):
         loss_config.setdefault('from_logits', True)
         super().compile(loss = loss, loss_config = loss_config, ** kwargs)
-    
-    def get_output(self, data, ** kwargs):
-        if self.nb_class == 1:
-            shape = [None, None, None] if self.is_3d else [None, None]
-        else:
-            shape = [None, None, None, None] if self.is_3d else [None, None, None]
-
-        mask = tf.py_function(
-            self.get_output_fn, [data['segmentation'], data['label']], Tout = tf.SparseTensorSpec(shape = shape, dtype = tf.uint8)
-        )
-        mask.indices.set_shape([None, len(shape)])
-        mask.values.set_shape([None])
-        mask.dense_shape.set_shape([len(shape)])
-        
-        return mask
     
     def predict(self,
                 images,

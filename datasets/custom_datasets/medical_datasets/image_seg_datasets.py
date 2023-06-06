@@ -20,6 +20,7 @@ import tensorflow as tf
 from tqdm import tqdm
 
 from loggers import timer
+from utils.med_utils import get_nb_frames
 from utils.file_utils import load_json, dump_json
 from datasets.custom_datasets import get_dataset_dir
 
@@ -45,8 +46,26 @@ def image_seg_dataset_wrapper(name, task, ** default_config):
                 
         """
         @timer(name = '{} loading'.format(name))
-        def _load_and_process(directory, * args, per_user_label = False, keep_artifacts = False, keep_passive = True, ** kwargs):
-            return dataset_loader(directory, * args, ** kwargs)
+        def _load_and_process(directory, * args, slice_step = None, slice_size = None, ** kwargs):
+            dataset = dataset_loader(directory, * args, ** kwargs)
+            
+            if slice_step or slice_size:
+                if not slice_step: slice_step = slice_size
+                
+                augmented = []
+                for data in dataset:
+                    for start in range(0, get_nb_frames(data), slice_step):
+                        augmented.append(data.copy())
+                        augmented[-1]['start_frame'] = start
+                        if slice_size: augmented[-1]['end_frame'] = start + slice_size
+                dataset = augmented
+            
+            dataset = pd.DataFrame(dataset)
+            
+            if 'id' not in dataset.columns:
+                dataset['id'] = dataset['subject_id']
+
+            return dataset
         
         from datasets.custom_datasets import add_dataset
         
@@ -146,7 +165,7 @@ def preprocess_tcia_annots(directory,
     
     if metadata_file: dump_json(filename = os.path.join(directory, metadata_file), data = all_segs_infos, indent = 4)
     
-    return pd.DataFrame(metadata)
+    return metadata
 
 @image_seg_dataset_wrapper(
     name  = 'total_segmentator', task  = IMAGE_SEGMENTATION, directory = '{}/Totalsegmentator_dataset'
@@ -177,7 +196,7 @@ def preprocess_totalsegmentator_annots(directory, combined_mask = ('masks.npz', 
             'label'           : [organ for organ, _ in segmentations]
         })
     
-    return pd.DataFrame(metadata)
+    return metadata
 
 tcia_manifests = {
     'LSTCS'        : 'manifest-1557326747206',

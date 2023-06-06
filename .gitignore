@@ -1,5 +1,11 @@
 # models
+*.png
+*.nii
+*.nii.gz
+*.npy
+*.npz
 pretrained_models/
+totalsegmentator/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

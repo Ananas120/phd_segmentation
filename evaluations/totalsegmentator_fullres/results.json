@@ -1,0 +1,698 @@
+{
+    "s0001": {
+        "null": {
+            "tp": 8019089,
+            "fp": 32523,
+            "fn": 26747,
+            "tn": 1892597
+        },
+        "spleen": {
+            "tp": 32975,
+            "fp": 500,
+            "fn": 105,
+            "tn": 9937376
+        },
+        "kidney_right": {
+            "tp": 39114,
+            "fp": 352,
+            "fn": 507,
+            "tn": 9930983
+        },
+        "kidney_left": {
+            "tp": 39512,
+            "fp": 672,
+            "fn": 158,
+            "tn": 9930614
+        },
+        "gallbladder": {
+            "tp": 325342,
+            "fp": 2577,
+            "fn": 1045,
+            "tn": 9641992
+        },
+        "liver": {
+            "tp": 45185,
+            "fp": 638,
+            "fn": 637,
+            "tn": 9924496
+        },
+        "stomach": {
+            "tp": 10087,
+            "fp": 230,
+            "fn": 290,
+            "tn": 9960349
+        },
+        "aorta": {
+            "tp": 4847,
+            "fp": 468,
+            "fn": 163,
+            "tn": 9965478
+        },
+        "inferior_vena_cava": {
+            "tp": 2939,
+            "fp": 226,
+            "fn": 135,
+            "tn": 9967656
+        },
+        "portal_vein_and_splenic_vein": {
+            "tp": 18821,
+            "fp": 694,
+            "fn": 719,
+            "tn": 9950722
+        },
+        "pancreas": {
+            "tp": 999,
+            "fp": 135,
+            "fn": 34,
+            "tn": 9969788
+        },
+        "adrenal_gland_right": {
+            "tp": 1575,
+            "fp": 156,
+            "fn": 19,
+            "tn": 9969206
+        },
+        "adrenal_gland_left": {
+            "tp": 8175,
+            "fp": 138,
+            "fn": 67,
+            "tn": 9962576
+        },
+        "lung_upper_lobe_left": {
+            "tp": 115,
+            "fp": 21,
+            "fn": 348,
+            "tn": 9970472
+        },
+        "lung_lower_lobe_left": {
+            "tp": 17584,
+            "fp": 119,
+            "fn": 6356,
+            "tn": 9946897
+        },
+        "lung_upper_lobe_right": {
+            "tp": 14790,
+            "fp": 231,
+            "fn": 278,
+            "tn": 9955657
+        },
+        "lung_middle_lobe_right": {
+            "tp": 14141,
+            "fp": 194,
+            "fn": 79,
+            "tn": 9956542
+        },
+        "lung_lower_lobe_right": {
+            "tp": 13733,
+            "fp": 145,
+            "fn": 91,
+            "tn": 9956987
+        },
+        "vertebrae_L5": {
+            "tp": 12358,
+            "fp": 152,
+            "fn": 72,
+            "tn": 9958374
+        },
+        "vertebrae_L4": {
+            "tp": 11480,
+            "fp": 170,
+            "fn": 75,
+            "tn": 9959231
+        },
+        "vertebrae_L3": {
+            "tp": 9336,
+            "fp": 159,
+            "fn": 46,
+            "tn": 9961415
+        },
+        "vertebrae_L2": {
+            "tp": 273,
+            "fp": 12,
+            "fn": 12,
+            "tn": 9970659
+        },
+        "vertebrae_L1": {
+            "tp": 0,
+            "fp": 4,
+            "fn": 0,
+            "tn": 9970952
+        },
+        "vertebrae_T12": {
+            "tp": 2892,
+            "fp": 3,
+            "fn": 110,
+            "tn": 9967951
+        },
+        "vertebrae_T11": {
+            "tp": 3868,
+            "fp": 2,
+            "fn": 10,
+            "tn": 9967076
+        },
+        "vertebrae_T10": {
+            "tp": 6302,
+            "fp": 7,
+            "fn": 5,
+            "tn": 9964642
+        },
+        "vertebrae_T9": {
+            "tp": 5668,
+            "fp": 6,
+            "fn": 4,
+            "tn": 9965278
+        },
+        "vertebrae_T8": {
+            "tp": 259076,
+            "fp": 6779,
+            "fn": 6834,
+            "tn": 9698267
+        },
+        "vertebrae_T7": {
+            "tp": 14877,
+            "fp": 1025,
+            "fn": 755,
+            "tn": 9954299
+        },
+        "vertebrae_T6": {
+            "tp": 121058,
+            "fp": 4954,
+            "fn": 4003,
+            "tn": 9840941
+        },
+        "vertebrae_T5": {
+            "tp": 299,
+            "fp": 25,
+            "fn": 5,
+            "tn": 9970627
+        },
+        "vertebrae_T4": {
+            "tp": 534,
+            "fp": 19,
+            "fn": 24,
+            "tn": 9970379
+        },
+        "vertebrae_T3": {
+            "tp": 942,
+            "fp": 41,
+            "fn": 5,
+            "tn": 9969968
+        },
+        "vertebrae_T2": {
+            "tp": 1181,
+            "fp": 58,
+            "fn": 3,
+            "tn": 9969714
+        },
+        "vertebrae_T1": {
+            "tp": 1085,
+            "fp": 38,
+            "fn": 54,
+            "tn": 9969779
+        },
+        "vertebrae_C7": {
+            "tp": 339,
+            "fp": 22,
+            "fn": 18,
+            "tn": 9970577
+        },
+        "vertebrae_C6": {
+            "tp": 507,
+            "fp": 7,
+            "fn": 8,
+            "tn": 9970434
+        },
+        "vertebrae_C5": {
+            "tp": 1046,
+            "fp": 42,
+            "fn": 9,
+            "tn": 9969859
+        },
+        "vertebrae_C4": {
+            "tp": 1840,
+            "fp": 81,
+            "fn": 7,
+            "tn": 9969028
+        },
+        "vertebrae_C3": {
+            "tp": 1284,
+            "fp": 54,
+            "fn": 28,
+            "tn": 9969590
+        },
+        "vertebrae_C2": {
+            "tp": 18694,
+            "fp": 199,
+            "fn": 243,
+            "tn": 9951820
+        },
+        "vertebrae_C1": {
+            "tp": 20350,
+            "fp": 83,
+            "fn": 183,
+            "tn": 9950340
+        },
+        "esophagus": {
+            "tp": 76094,
+            "fp": 309,
+            "fn": 1240,
+            "tn": 9893313
+        },
+        "trachea": {
+            "tp": 75440,
+            "fp": 345,
+            "fn": 1106,
+            "tn": 9894065
+        },
+        "heart_myocardium": {
+            "tp": 52197,
+            "fp": 550,
+            "fn": 730,
+            "tn": 9917479
+        },
+        "heart_atrium_left": {
+            "tp": 71626,
+            "fp": 966,
+            "fn": 1060,
+            "tn": 9897304
+        },
+        "heart_ventricle_left": {
+            "tp": 79122,
+            "fp": 828,
+            "fn": 801,
+            "tn": 9890205
+        },
+        "heart_atrium_right": {
+            "tp": 57639,
+            "fp": 418,
+            "fn": 1027,
+            "tn": 9911872
+        },
+        "heart_ventricle_right": {
+            "tp": 53063,
+            "fp": 575,
+            "fn": 1079,
+            "tn": 9916239
+        },
+        "pulmonary_artery": {
+            "tp": 13934,
+            "fp": 309,
+            "fn": 205,
+            "tn": 9956508
+        },
+        "brain": {
+            "tp": 12942,
+            "fp": 328,
+            "fn": 162,
+            "tn": 9957524
+        },
+        "iliac_artery_left": {
+            "tp": 73378,
+            "fp": 640,
+            "fn": 972,
+            "tn": 9895966
+        },
+        "iliac_artery_right": {
+            "tp": 67270,
+            "fp": 942,
+            "fn": 1139,
+            "tn": 9901605
+        },
+        "iliac_vena_left": {
+            "tp": 58553,
+            "fp": 1039,
+            "fn": 878,
+            "tn": 9910486
+        },
+        "iliac_vena_right": {
+            "tp": 51374,
+            "fp": 732,
+            "fn": 831,
+            "tn": 9918019
+        },
+        "small_bowel": {
+            "tp": 61063,
+            "fp": 1007,
+            "fn": 1428,
+            "tn": 9907458
+        }
+    },
+    "s0002": {
+        "null": {
+            "tp": 2019570,
+            "fp": 136936,
+            "fn": 6223,
+            "tn": 228951
+        },
+        "spleen": {
+            "tp": 1349,
+            "fp": 883,
+            "fn": 17,
+            "tn": 2389431
+        },
+        "kidney_right": {
+            "tp": 1889,
+            "fp": 94,
+            "fn": 88,
+            "tn": 2389609
+        },
+        "kidney_left": {
+            "tp": 481,
+            "fp": 41,
+            "fn": 47,
+            "tn": 2391111
+        },
+        "gallbladder": {
+            "tp": 3901,
+            "fp": 40,
+            "fn": 111,
+            "tn": 2387628
+        },
+        "liver": {
+            "tp": 4277,
+            "fp": 90,
+            "fn": 90,
+            "tn": 2387223
+        },
+        "stomach": {
+            "tp": 2929,
+            "fp": 164,
+            "fn": 57,
+            "tn": 2388530
+        },
+        "aorta": {
+            "tp": 2642,
+            "fp": 96,
+            "fn": 31,
+            "tn": 2388911
+        },
+        "inferior_vena_cava": {
+            "tp": 2628,
+            "fp": 68,
+            "fn": 31,
+            "tn": 2388953
+        },
+        "portal_vein_and_splenic_vein": {
+            "tp": 2692,
+            "fp": 84,
+            "fn": 38,
+            "tn": 2388866
+        },
+        "pancreas": {
+            "tp": 4222,
+            "fp": 95,
+            "fn": 39,
+            "tn": 2387324
+        },
+        "adrenal_gland_right": {
+            "tp": 3901,
+            "fp": 81,
+            "fn": 74,
+            "tn": 2387624
+        },
+        "adrenal_gland_left": {
+            "tp": 910,
+            "fp": 43,
+            "fn": 23,
+            "tn": 2390704
+        },
+        "lung_upper_lobe_left": {
+            "tp": 3534,
+            "fp": 97,
+            "fn": 46,
+            "tn": 2388003
+        },
+        "lung_lower_lobe_left": {
+            "tp": 23696,
+            "fp": 329,
+            "fn": 1107,
+            "tn": 2366548
+        },
+        "lung_upper_lobe_right": {
+            "tp": 793,
+            "fp": 53,
+            "fn": 8,
+            "tn": 2390826
+        },
+        "lung_middle_lobe_right": {
+            "tp": 833,
+            "fp": 92,
+            "fn": 16,
+            "tn": 2390739
+        },
+        "lung_lower_lobe_right": {
+            "tp": 833,
+            "fp": 59,
+            "fn": 4,
+            "tn": 2390784
+        },
+        "vertebrae_L5": {
+            "tp": 729,
+            "fp": 49,
+            "fn": 12,
+            "tn": 2390890
+        },
+        "vertebrae_L4": {
+            "tp": 4294,
+            "fp": 310,
+            "fn": 209,
+            "tn": 2386867
+        },
+        "vertebrae_L3": {
+            "tp": 3152,
+            "fp": 88,
+            "fn": 142,
+            "tn": 2388298
+        },
+        "vertebrae_L2": {
+            "tp": 3298,
+            "fp": 44,
+            "fn": 46,
+            "tn": 2388292
+        },
+        "vertebrae_L1": {
+            "tp": 3085,
+            "fp": 96,
+            "fn": 52,
+            "tn": 2388447
+        },
+        "vertebrae_T12": {
+            "tp": 140020,
+            "fp": 3093,
+            "fn": 134396,
+            "tn": 2114171
+        },
+        "vertebrae_T11": {
+            "tp": 6144,
+            "fp": 193,
+            "fn": 144,
+            "tn": 2385199
+        },
+        "vertebrae_T10": {
+            "tp": 6585,
+            "fp": 75,
+            "fn": 242,
+            "tn": 2384778
+        }
+    },
+    "s0003": {
+        "null": {
+            "tp": 1888313,
+            "fp": 4742,
+            "fn": 3181,
+            "tn": 136018
+        },
+        "spleen": {
+            "tp": 8332,
+            "fp": 85,
+            "fn": 59,
+            "tn": 2023778
+        },
+        "kidney_right": {
+            "tp": 8949,
+            "fp": 120,
+            "fn": 44,
+            "tn": 2023141
+        },
+        "kidney_left": {
+            "tp": 83,
+            "fp": 26,
+            "fn": 6,
+            "tn": 2032139
+        },
+        "gallbladder": {
+            "tp": 3168,
+            "fp": 37,
+            "fn": 49,
+            "tn": 2029000
+        },
+        "liver": {
+            "tp": 5159,
+            "fp": 38,
+            "fn": 43,
+            "tn": 2027014
+        },
+        "stomach": {
+            "tp": 4888,
+            "fp": 24,
+            "fn": 66,
+            "tn": 2027276
+        },
+        "aorta": {
+            "tp": 3627,
+            "fp": 45,
+            "fn": 27,
+            "tn": 2028555
+        },
+        "inferior_vena_cava": {
+            "tp": 2763,
+            "fp": 39,
+            "fn": 41,
+            "tn": 2029411
+        },
+        "portal_vein_and_splenic_vein": {
+            "tp": 2767,
+            "fp": 45,
+            "fn": 39,
+            "tn": 2029403
+        },
+        "pancreas": {
+            "tp": 2756,
+            "fp": 21,
+            "fn": 46,
+            "tn": 2029431
+        },
+        "adrenal_gland_right": {
+            "tp": 2796,
+            "fp": 30,
+            "fn": 33,
+            "tn": 2029395
+        },
+        "adrenal_gland_left": {
+            "tp": 3772,
+            "fp": 16,
+            "fn": 51,
+            "tn": 2028415
+        },
+        "lung_upper_lobe_left": {
+            "tp": 3071,
+            "fp": 10,
+            "fn": 65,
+            "tn": 2029108
+        },
+        "lung_lower_lobe_left": {
+            "tp": 1384,
+            "fp": 53,
+            "fn": 68,
+            "tn": 2030749
+        },
+        "lung_upper_lobe_right": {
+            "tp": 2753,
+            "fp": 29,
+            "fn": 58,
+            "tn": 2029414
+        },
+        "lung_middle_lobe_right": {
+            "tp": 26133,
+            "fp": 1323,
+            "fn": 1767,
+            "tn": 2003031
+        },
+        "lung_lower_lobe_right": {
+            "tp": 861,
+            "fp": 13,
+            "fn": 10,
+            "tn": 2031370
+        },
+        "vertebrae_L5": {
+            "tp": 897,
+            "fp": 41,
+            "fn": 10,
+            "tn": 2031306
+        },
+        "vertebrae_L4": {
+            "tp": 442,
+            "fp": 11,
+            "fn": 46,
+            "tn": 2031755
+        },
+        "vertebrae_L3": {
+            "tp": 139,
+            "fp": 22,
+            "fn": 6,
+            "tn": 2032087
+        },
+        "vertebrae_L2": {
+            "tp": 814,
+            "fp": 6,
+            "fn": 22,
+            "tn": 2031412
+        },
+        "vertebrae_L1": {
+            "tp": 488,
+            "fp": 164,
+            "fn": 64,
+            "tn": 2031538
+        },
+        "vertebrae_T12": {
+            "tp": 474,
+            "fp": 61,
+            "fn": 174,
+            "tn": 2031545
+        },
+        "vertebrae_T11": {
+            "tp": 109,
+            "fp": 29,
+            "fn": 4,
+            "tn": 2032112
+        },
+        "vertebrae_T10": {
+            "tp": 205,
+            "fp": 2,
+            "fn": 11,
+            "tn": 2032036
+        },
+        "vertebrae_T9": {
+            "tp": 3338,
+            "fp": 34,
+            "fn": 128,
+            "tn": 2028754
+        },
+        "vertebrae_T8": {
+            "tp": 13060,
+            "fp": 220,
+            "fn": 133,
+            "tn": 2018841
+        },
+        "vertebrae_T7": {
+            "tp": 3058,
+            "fp": 11,
+            "fn": 60,
+            "tn": 2029125
+        },
+        "vertebrae_T6": {
+            "tp": 4655,
+            "fp": 36,
+            "fn": 95,
+            "tn": 2027468
+        },
+        "vertebrae_T5": {
+            "tp": 7465,
+            "fp": 413,
+            "fn": 1376,
+            "tn": 2023000
+        },
+        "vertebrae_T4": {
+            "tp": 8378,
+            "fp": 218,
+            "fn": 208,
+            "tn": 2023450
+        },
+        "vertebrae_T3": {
+            "tp": 8937,
+            "fp": 256,
+            "fn": 230,
+            "tn": 2022831
+        }
+    }
+}

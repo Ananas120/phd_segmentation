@@ -10,57 +10,35 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import cv2
-import logging
 import numpy as np
-import pandas as pd
 import tensorflow as tf
 
-from loggers import timer
 from utils.image.geo_utils import *
-from models.interfaces.base_image_model import BaseImageModel
+from models.detection.base_detector import BaseDetector
 
-logger  = logging.getLogger(__name__)
-
-class EAST(BaseImageModel):
+class EAST(BaseDetector):
     def __init__(self,
-                 labels = None,
-                 nb_class   = None,
-                 input_size = 512,
-
-                 obj_threshold  = 0.35,
-
+                 * args,
+                 image_normalization    = 'east',
+                 resize_kwargs  = {'antialias' : True},
                  ** kwargs
                 ):
-        self._init_image(input_size = input_size, ** kwargs)
-
-        if labels is None: labels = ['object']
-        self.labels   = list(labels) if not isinstance(labels, str) else [labels]
-        self.nb_class = max(1, nb_class if nb_class is not None else len(self.labels))
-        if self.nb_class > len(self.labels):
-            self.labels += [''] * (self.nb_class - len(self.labels))
-
-        self.obj_threshold  = obj_threshold
-        
-        self.label_to_idx   = {label : i for i, label in enumerate(self.labels)}
-        
-        if self.use_labels: raise NotImplementedError('Not fully supported yet !')
-        
-        super().__init__(** kwargs)
-
-    def _build_model(self, architecture = 'unet', ** kwargs):
+        super().__init__(
+            * args,
+            resize_kwargs   = resize_kwargs,
+            image_normalization = image_normalization,
+            ** kwargs
+        )
+    
+    def _build_model(self, architecture = 'VGGBNUNet', ** kwargs):
         super()._build_model(model = {
             'architecture_name' : architecture,
             'input_shape'   : self.input_size,
-            'output_dim'    : [1, 5] + ([self.nb_class] if self.use_labels else []),
-            'final_activation'  : ['sigmoid', 'sigmoid', 'softmax'],
-            'final_name'    : ['score_map', 'geo_map', 'class'],
+            'output_dim'    : [1, 4, 1] + ([self.nb_class] if self.use_labels else []),
+            'final_activation'  : ['sigmoid', 'sigmoid', 'sigmoid', 'softmax'],
+            'final_name'    : ['score_map', 'geo_map', 'theta_map', 'class_map'],
             ** kwargs
         })
-    
-    @property
-    def use_labels(self):
-        return False if self.nb_class == 1 else True
     
     @property
     def output_signature(self):
@@ -78,33 +56,28 @@ class EAST(BaseImageModel):
     @property
     def training_hparams(self):
         return super().training_hparams(
-            ** self.training_hparams_image,
             min_poly_size   = 6,
             max_wh_factor   = 5,
             shrink_ratio    = 0.1
         )
     
-    def __str__(self):
-        des = super().__str__()
-        des += self._str_image()
-        des += "- Labels (n = {}) : {}\n".format(len(self.labels), self.labels)
-        return des
-    
     def compile(self, loss = 'EASTLoss', ** kwargs):
         super().compile(loss = loss, ** kwargs)
 
-    def decode_output(self, model_output, ** kwargs):
-        score_map = model_output[1][0, :, :, 0]
-        geo_map   = model_output[0][0, :, :, :] * score_map[:, :, np.newaxis]
-
-        # filter the score map
-        points = np.argwhere(score_map > self.obj_threshold)
-
-        # sort the text boxes via the y axis
-        points = points[np.argsort(points[:, 0])]
-
-        # restore
-        return restore_rectangle_rbox(points[:, ::-1], geo_map[points[:, 0], points[:, 1]])
+    def decode_output(self, model_output, normalize = True, ** kwargs):
+        kwargs.setdefault('threshold',      self.obj_threshold)
+        kwargs.setdefault('nms_threshold',  self.nms_threshold)
+        
+        score_map, geo_map, theta_map = [out.numpy() for out in model_output[:3]]
+        
+        return restore_polys_from_map(
+            score_map   = score_map,
+            geo_map     = geo_map * 512,
+            theta_map   = (theta_map - 0.5) * np.pi,
+            normalize   = normalize,
+            scale   = self.downscale_factor,
+            ** kwargs
+        )
 
     def get_rbox(self,
                  polys,
@@ -145,20 +118,11 @@ class EAST(BaseImageModel):
             max_wh_factor   = max_wh_factor
         )
 
-    def get_input(self, filename, ** kwargs):
-        return self.get_image(filename)
-    
     def filter_data(self, inputs, outputs):
         if tf.reduce_any(tf.math.is_nan(outputs[1])): return False
         return tf.reduce_any(tf.logical_and(
             tf.cast(outputs[0], tf.bool), outputs[-1]
         ))
-    
-    def augment_input(self, image, ** kwargs):
-        return self.augment_image(image)
-    
-    def preprocess_input(self, image, ** kwargs):
-        return self.preprocess_image(image)
     
     def get_output(self, data):
         outputs = tf.numpy_function(
@@ -172,24 +136,3 @@ class EAST(BaseImageModel):
         valid_mask  .set_shape(self.input_size[:2])
         
         return score_map, geo_map, valid_mask
-    
-    def encode_data(self, data):
-        return self.get_input(data), self.get_output(data)
-    
-    def augment_data(self, image, output):
-        return self.augment_input(image), output
-    
-    def preprocess_data(self, image, output):
-        return self.preprocess_input(image), output
-                                
-    def get_config(self, * args, ** kwargs):
-        config = super().get_config(* args, ** kwargs)
-        config.update({
-            ** self.get_config_image(),
-            'labels'    : self.labels,
-            'nb_class'  : self.nb_class,
-            'obj_threshold' : self.obj_threshold
-        })
-        
-        return config
-
