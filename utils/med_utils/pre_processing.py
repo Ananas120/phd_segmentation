@@ -9,36 +9,51 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import numpy as np
 import tensorflow as tf
 
+from utils.med_utils.sparse_utils import sparse_pad
 from utils.med_utils.resampling import _multiply, resample_volume, compute_new_shape
 
-def get_frames(data, start = -1, end = -1):
+def extract_slices(data, start = -1, end = -1, axis = 2):
+    if axis < 0: axis = len(tf.shape(data)) + axis
     if start == -1: start = 0
+    
     if isinstance(data, (np.ndarray, tf.Tensor)):
-        if end == -1: end = data.shape[2]
-        assert len(data.shape) > 2, 'Data must have at least 3 dimensions (height, width, frames[, channels])'
-        return data[..., start : end] if len(data.shape) == 3 else data[..., start : end, :]
+        if end == -1: end = tf.shape(data)[axis]
+        
+        if axis == 0:   return data[start : end]
+        elif axis == 1: return data[:, start : end]
+        elif axis == 2: return data[:, :, start : end]
+        else:           return data[..., start : end]
+
     elif isinstance(data, tf.sparse.SparseTensor):
-        if end == -1: end = data.dense_shape[2]
-        starts  = [0, 0, start]
-        lengths = [data.dense_shape[0], data.dense_shape[1], end - start]
-        if len(data.dense_shape) == 4:
-            starts += [0]
-            lengths += [data.dense_shape[3]]
+        if end == -1: end = tf.shape(data)[axis]
+        
+        shape   = tf.shape(data)
+        starts  = tf.concat([
+            tf.zeros((axis, ), dtype = tf.int64),
+            tf.cast(tf.fill((1, ), start), tf.int64),
+            tf.zeros((len(shape) - axis - 1, ), dtype = tf.int64)
+        ], axis = -1)
+        lengths = tf.cast(tf.concat([
+            shape[:axis],
+            tf.reshape(tf.cast(end - start, shape.dtype), [-1]),
+            shape[axis + 1 :]
+        ], axis = -1), tf.int64)
         
         return tf.sparse.slice(data, starts, lengths)
     else:
         raise ValueError('Unknown data type ({}) : {}'.format(type(data), data))
         
-    
+
 def pad_or_crop(img,
                 target_shape,
                 mask    = None,
                 
                 crop_mode   = 'center',
                 
-                pad_mode    = 'even',
+                pad_mode    = 'after',
                 pad_value   = None,
                 ** kwargs
                ):
@@ -61,36 +76,40 @@ def pad_or_crop(img,
         pad = tf.maximum(- diff, 0)
         
         if pad_mode == 'before':
-            padding = [(pad[i], 0) for i in range(len(pad))]
+            padding = tf.concat([
+                tf.expand_dims(pad, axis = 1),
+                tf.zeros((tf.shape(pad)[0], 1), dtype = pad.dtype)
+            ], axis = 1)
         elif pad_mode == 'after':
-            padding = [(0, pad[i]) for i in range(len(pad))]
+            padding = tf.concat([
+                tf.zeros((tf.shape(pad)[0], 1), dtype = pad.dtype),
+                tf.expand_dims(pad, axis = 1)
+            ], axis = 1)
         else:
-            pad_half = pad // 2
-            padding = [(pad_half[i], pad[i] - pad_half[i]) for i in range(len(pad))]
+            pad_half = tf.expand_dims(pad // 2, axis = 1)
+            padding  = tf.concat([
+                pad_half, tf.expand_dims(pad, axis = 1) - pad_half
+            ], axis = 1)
+        
+        if tf.shape(padding)[0] < len(tf.shape(img)):
+            padding = tf.concat([
+                padding, tf.zeros((len(tf.shape(img)) - tf.shape(padding)[0], 2), dtype = padding.dtype)
+            ], axis = 0)
         
         img = tf.pad(
-            img, padding if len(shape) == len(padding) else padding + [(0, 0)], constant_values = pad_value
+            img, padding, constant_values = pad_value
         )
         if mask is not None:
+            if tf.shape(padding)[0] < len(tf.shape(mask)):
+                padding = tf.concat([
+                    padding, tf.zeros((len(tf.shape(mask)) - tf.shape(padding)[0], 2), dtype = padding.dtype)
+                ], axis = 0)
+            
             if not isinstance(mask, tf.sparse.SparseTensor):
-                mask = tf.pad(mask, padding if len(tf.shape(mask)) <= 3 else padding + [(0, 0)])
+                mask = tf.pad(mask, padding)
             else:
-                offset = [padding[i][0] for i in range(len(padding))]
-                if len(offset) < len(tf.shape(mask)): offset = offset + [0]
-                
-                new_indices = mask.indices + tf.expand_dims(tf.cast(offset, mask.indices.dtype), axis = 0)
-                
-                new_shape   = tf.shape(mask)[: len(pad)]
-                new_shape   = new_shape + tf.cast(pad, new_shape.dtype)
-                if len(new_shape) < len(tf.shape(mask)):
-                    new_shape = tf.concat([new_shape, tf.shape(mask)[len(pad) :]], axis = 0)
-                
-                mask = tf.sparse.SparseTensor(
-                    indices = new_indices,
-                    values  = mask.values,
-                    dense_shape = tf.cast(new_shape, tf.int64)
-                )
-    
+                mask = sparse_pad(mask, padding)
+
     if tf.reduce_any(diff > 0):
         offsets = [_get_start(
             diff[i], crop_mode[i] if isinstance(crop_mode, (list, tuple)) else crop_mode
@@ -109,10 +128,14 @@ def pad_or_crop(img,
         
         if mask is not None:
             if isinstance(mask, tf.sparse.SparseTensor):
+                lengths = target_shape
+                offsets = tf.cast(offsets, tf.int64)
+                if len(tf.shape(mask)) > len(offsets):
+                    offsets = tf.concat([offsets, tf.zeros((1, ), dtype = tf.int64)], axis = 0)
+                    lengths = tf.concat([target_shape, [tf.shape(mask)[-1]]], axis = 0)
+                
                 mask = tf.sparse.slice(
-                    mask,
-                    offsets + ([0] if len(tf.shape(mask)) > len(offsets) else []),
-                    [target_shape[0], target_shape[1], target_shape[2]] + ([tf.shape(mask)[-1]] if len(tf.shape(mask)) > len(offsets) else [])
+                    mask, offsets, tf.cast(lengths, tf.int64)
                 )
             else:
                 if len(offsets) == 2:
@@ -143,7 +166,7 @@ def crop_then_reshape(img,
                      ):
     target_shape    = tf.cast(target_shape, tf.int32)
     max_inter_shape = tf.shape(img)[: len(target_shape)]
-        
+    
     factors      = compute_new_shape(
         target_shape, voxel_dims = target_voxel_dims, target_voxel_dims = voxel_dims, return_factors = True
     )

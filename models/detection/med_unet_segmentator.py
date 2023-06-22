@@ -25,38 +25,8 @@ class MedUNetSegmentator(MedUNet):
     def _build_model(self, * args, final_activation = None, ** kwargs):
         super()._build_model(* args, final_activation = final_activation, ** kwargs)
     
-    def infer(self, images : tf.Tensor, win_len : tf.Tensor = -1, hop_len : tf.Tensor = -1):
-        return np.argmax(super().infer(images, win_len, hop_len), axis = -1)
-    
-    def infer_old(self, data : tf.Tensor, win_len : tf.Tensor = -1, hop_len : tf.Tensor = -1):
-        if self.is_3d:
-            if win_len == -1: win_len = self.max_frames if self.max_frames is not None else tf.shape(images)[-2]
-            if hop_len == -1: hop_len = win_len
-        
-        images = self.pad_to_multiple(data)
-        if self.is_3d and win_len > 0 and win_len < tf.shape(images)[-2]:
-            n_slices = tf.cast(tf.math.ceil((tf.shape(images)[-2] - win_len) / hop_len), tf.int32)
-            
-            pad = n_slices * hop_len + win_len - tf.shape(images)[-2]
-            if pad > 0:
-                n_slices += 1
-                images = tf.pad(images, [(0, 0), (0, 0), (0, 0), (0, pad), (0, 0)])
-            
-            pred     = tf.TensorArray(
-                dtype = tf.int32, size = n_slices
-            )
-            for i in tf.range(n_slices):
-                out_i = tf.argmax(self(
-                    images[..., i * hop_len : i * hop_len + win_len, :], training = False
-                ), axis = -1, output_type = tf.int32)
-                pred = pred.write(i, tf.transpose(out_i, [3, 0, 1, 2]))
-                
-            pred = tf.transpose(pred.concat(), [1, 2, 3, 0])
-            if pad > 0: pred = pred[..., : - pad, :]
-        else:
-            pred = tf.argmax(self(images, training = False), axis = -1, output_type = tf.int32)
-        
-        return pred[:, : data.shape[1], : data.shape[2], : data.shape[3]]
+    def infer(self, * args, use_argmax = True, ** kwargs):
+        return super().infer(* args, use_argmax = use_argmax, ** kwargs)
     
     def compile(self, loss = 'DiceLoss', loss_config = {}, ** kwargs):
         loss_config.setdefault('from_logits', True)

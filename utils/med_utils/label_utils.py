@@ -12,76 +12,231 @@
 import numpy as np
 import tensorflow as tf
 
+from utils.generic_utils import convert_to_str
+from utils.med_utils.sparse_utils import sparse_pad
+
 TOTALSEGMENTATOR_LABELS = [
     None, 'spleen', 'kidney_right', 'kidney_left', 'gallbladder', 'liver', 'stomach', 'aorta', 'inferior_vena_cava', 'portal_vein_and_splenic_vein', 'pancreas', 'adrenal_gland_right', 'adrenal_gland_left', 'lung_upper_lobe_left', 'lung_lower_lobe_left', 'lung_upper_lobe_right', 'lung_middle_lobe_right', 'lung_lower_lobe_right', 'vertebrae_L5', 'vertebrae_L4', 'vertebrae_L3', 'vertebrae_L2', 'vertebrae_L1', 'vertebrae_T12', 'vertebrae_T11', 'vertebrae_T10', 'vertebrae_T9', 'vertebrae_T8', 'vertebrae_T7', 'vertebrae_T6', 'vertebrae_T5', 'vertebrae_T4', 'vertebrae_T3', 'vertebrae_T2', 'vertebrae_T1', 'vertebrae_C7', 'vertebrae_C6', 'vertebrae_C5', 'vertebrae_C4', 'vertebrae_C3', 'vertebrae_C2', 'vertebrae_C1', 'esophagus', 'trachea', 'heart_myocardium', 'heart_atrium_left', 'heart_ventricle_left', 'heart_atrium_right', 'heart_ventricle_right', 'pulmonary_artery', 'brain', 'iliac_artery_left', 'iliac_artery_right', 'iliac_vena_left', 'iliac_vena_right', 'small_bowel', 'duodenum', 'colon', 'rib_left_1', 'rib_left_2', 'rib_left_3', 'rib_left_4', 'rib_left_5', 'rib_left_6', 'rib_left_7', 'rib_left_8', 'rib_left_9', 'rib_left_10', 'rib_left_11', 'rib_left_12', 'rib_right_1', 'rib_right_2', 'rib_right_3', 'rib_right_4', 'rib_right_5', 'rib_right_6', 'rib_right_7', 'rib_right_8', 'rib_right_9', 'rib_right_10', 'rib_right_11', 'rib_right_12', 'humerus_left', 'humerus_right', 'scapula_left', 'scapula_right', 'clavicula_left', 'clavicula_right', 'femur_left', 'femur_right', 'hip_left', 'hip_right', 'sacrum', 'face', 'gluteus_maximus_left', 'gluteus_maximus_right', 'gluteus_medius_left', 'gluteus_medius_right', 'gluteus_minimus_left', 'gluteus_minimus_right', 'autochthon_left', 'autochthon_right', 'iliopsoas_left', 'iliopsoas_right', 'urinary_bladder'
 ]
 
 def add_zero_label(mask, is_one_hot):
-    if isinstance(mask, tf.sparse.SparseTensor):
-        new_indices, new_values, new_shape = mask.indices, mask.values, mask.dense_shape
-        if is_one_hot:
-            new_shape   = tuple(new_shape[:-1]) + (new_shape[-1] + 1, )
-            new_indices = new_indices + tf.cast([
-                [0] * (new_indices.shape[1] - 1) + [1]
-            ], mask.indices.dtype)
+    if not is_one_hot:
+        if isinstance(mask, tf.sparse.SparseTensor):
+            return tf.sparse.SparseTensor(
+                indices = mask.indices, values = mask.values + 1, dense_shape = mask.dense_shape
+            )
         else:
-            new_values = new_values + 1
-        
-        return tf.sparse.SparseTensor(
-            indices = new_indices, values = new_values, dense_shape = new_shape
-        )
-    elif is_one_hot:
-        pad_fn = tf.pad if isinstance(mask, tf.Tensor) else np.pad
-        
+            raise NotImplementedError('Adding label is not supported for `Dense` tensor which is not one-hot encoded')
+    elif isinstance(mask, np.ndarray):
         padding = [(0, 0)] * (len(mask.shape) - 1) + [(1, 0)]
-        return pad_fn(mask, padding)
+        return np.pad(mask, padding)
     else:
-        raise RuntimeError('To add a zero-label, the array must either be a Sparse tensor, either one-hot encoded')
-
-def build_mapping(labels, groups):
-    """
-        Creates a mapping (dict) `{sub_label : index}` where :
-        - `sub_label` is a label in `groups` and
-        - `index` is its corresponding index from `labels`
+        pad_fn = tf.pad if not isinstance(mask, tf.sparse.SparseTensor) else sparse_pad
         
-        If `labels` is not provided, `groups` may be a list of list, where each label in a nested list
-        is mapped to its index in the main list
-        Example [('a', 'b'), 'c'] -> {'a' : 0, 'b' : 0, 'c' : 1}
+        padding = tf.concat([
+            tf.zeros((len(tf.shape(mask)) - 1, 2), dtype = tf.int32),
+            tf.cast([[1, 0]], tf.int32)
+        ], axis = 0)
+
+        return pad_fn(mask, padding)
+
+
+def build_mapping(labels, output_format = 'dict'):
+    """
+        Creates a mapping (dict) `{label : index}`
         
         Arguments :
-            - labels : a list of labels (typically the labels used by the model)
-            - groups : a mapping that matches one "main label" to multiple "sub labels"
-                - dict : {main_label : list_of_sub_labels}
-                - list : nested list, where the main list must have the same length as `labels` (if provided)
-                    Example : `labels = ['a', 'b'], groups = [('a1', 'a2'), 'b']`
+            - labels : the (possibly nested) list of labels
+                - dict : `{label : index}`, returned as is (already a mapping)
+                - nested lists : (example [(l1, l2), l3] -> {l1 : 0, l2 : 0, l3 : 1})
+                - list : [l1, l2, l3] -> {l1 : 0, l2 : 1, l3 : 2}
         Return :
-            - dict : where keys are sub-labels, and values are the corresponding "main label" index
+            - dict : where keys are sub-labels, and values are the corresponding index
     """
-    if labels is None and groups is None: return None
+    if labels is None: return {} if output_format == 'dict' else tf.cast([[]], tf.string)
 
-    mapping = {}
-    if labels is None:
-        if isinstance(groups, dict):
-            if all(isinstance(v, int) for v in groups.values()): return groups
-            groups = list(groups.values())
+    if output_format == 'dict':
+        if isinstance(labels, dict): return labels
+
+        mapping = {}
+        for i, label in enumerate(convert_to_str(labels)):
+            if not isinstance(label, (list, tuple)): label = [label]
+            for l in label: mapping[l] = i
+    
+    elif output_format in ('tf', 'tensor'):
+        if isinstance(labels, tf.Tensor):
+            if len(tf.shape(labels)) == 1: labels = tf.expand_dims(labels, axis = 1)
+            return labels
         
-        assert isinstance(groups, list), 'When `labels is None`, you must proved `groups` as a nested list'
-        for i, l in enumerate(groups):
-            if not isinstance(l, (list, tuple)): l = [l]
-            for l_i in l: mapping[l_i] = i
-    elif groups is not None:
-        if isinstance(groups, list):
-            assert len(groups) == len(labels), 'When `groups` is a nested list, it must have the same length as `labels` ({} vs {})'.format(len(groups), len(labels))
-            groups = {label : group for label, group in zip(labels, groups)}
+        max_len = max([len(l) if isinstance(l, (list, tuple)) else 0 for l in labels])
         
-        for main_label, sub_labels in groups.items():
-            if main_label not in labels: continue
-            if not isinstance(sub_labels, (list, tuple)): sub_labels = [sub_labels]
-            for sub_l in sub_labels: mapping[sub_l] = labels.index(main_label)
-    else:
-        mapping = {label : i for i, label in enumerate(labels)}
+        if max_len == 0: return tf.expand_dims(tf.cast([l if l else '' for l in labels], tf.string), axis = 1)
+        
+        mapping = []
+        for label in labels:
+            if not label: label = ''
+            if isinstance(label, str): label = [label]
+            mapping.append(list(label) + [''] * (max_len - len(label)))
+        mapping = tf.cast(mapping, tf.string)
     
     return mapping
+
+def build_lookup_table(labels, mapping, default = 0):
+    labels  = tf.cast(labels, tf.string)
+    mapping = build_mapping(mapping, output_format  = 'tensor')
+    
+    match  = tf.reduce_any(labels[tf.newaxis, tf.newaxis, :] == mapping[:, :, tf.newaxis], axis = 1)
+    
+    mask   = tf.reduce_any(match, axis = 0)
+    keys   = tf.boolean_mask(tf.range(tf.shape(labels)[0], dtype = tf.int32), mask)
+    values = tf.boolean_mask(tf.argmax(match, axis = 0, output_type = tf.int32), mask)
+
+    init  = tf.lookup.KeyValueTensorInitializer(keys, values)
+    table = tf.lookup.StaticHashTable(init, default_value = default)
+    return table
+
+def rearrange_labels(array, labels, mapping, default = 0, is_one_hot = None, name = None, ** kwargs):
+    """
+        Rearrange the labels given an initial order (`labels`) and a mapping
+        
+        Arguments :
+            - array : the labels to rearrange (supports np.ndarray and tf.sparse.SparseTensor)
+                if `array.shape[-1] == len(labels)`, the array is considered as one-hot encoded
+            - labels    : the list of original labels (i.e. the associated label to any value in `array`)
+            - mapping   : a mapping to map each label in `labels` to a new id
+                - list (of str or list) : each sub-label (i.e. those in the nested lists) are mapped to their list index
+                - dict : each key is a label, and the value is its corresponding index
+            - default   : the default label to set if no mapping is found
+            - kwargs    : additional possible kwargs (mainly ignored)
+        Return :
+            - the rearranged labels
+        
+        Important note :
+            if `array` is not a `tf.sparse.SparseTensor`:
+                The returned value is not a one-hot encoded version (even if the input was)
+            else:
+                All values mapped to `default` are removed from the `Sparse` array
+        
+        Example : 
+            array = np.array([
+                [1, 2, 1],
+                [0, 0, 2]
+                [3, 1, 2]
+            ])
+            labels  = ['l0', 'l1', 'l2', 'l3']
+            # maps 'l3' from index 3 to 1, and maps 'l1' and 'l2' (index 1 and 2) to index 2
+            mapping = ['l0', 'l3', ('l1', 'l2')]
+
+            result == np.array([
+                [2, 2, 2],
+                [0, 0, 2],
+                [1, 2, 2]
+            ])
+    """
+    with tf.name_scope(name or 'rearrange_labels'):
+        if is_one_hot is None: is_one_hot  = array.shape[-1] == len(labels)
+        is_sparse   = isinstance(array, tf.sparse.SparseTensor)
+
+        tf_labels  = tf.cast(labels, tf.string)
+        tf_mapping = build_mapping(mapping, output_format = 'tensor')
+        if tf.reduce_all(tf_labels == tf_mapping[: tf.shape(tf_labels)[0], 0]):
+            return array
+        elif tf.reduce_all(tf_labels == tf_mapping[1 : tf.shape(tf_labels)[0] + 1, 0]):
+            return add_zero_label(array, is_one_hot)
+        else:
+            if is_sparse:
+                if is_one_hot:
+                    fn = rearrange_labels_sparse_one_hot
+                else:
+                    fn = rearrange_labels_sparse
+            else:
+                if is_one_hot:
+                    fn = rearrange_labels_one_hot
+                else:
+                    fn = rearrange_labels_dense
+
+            return fn(array, labels, mapping, default = default, ** kwargs)
+
+def rearrange_labels_one_hot(array, labels, mapping, default = 0, dtype = np.int32, ** kwargs):
+    if isinstance(array, tf.Tensor):
+        mapping   = build_mapping(mapping, output_format = 'tensor')
+        new_depth = tf.shape(mapping)[0]
+        return tf.one_hot(rearrange_labels_dense(
+            tf.argmax(array, axis = -1), labels, mapping, default = default
+        ), depth = new_depth, dtype = array.dtype)
+
+    mapping   = build_mapping(mapping, output_format = 'dict')
+    new_depth = max(mapping.values()) + 1
+
+    array = array.astype(bool)
+
+    result = np.full(array.shape[:-1] + (new_depth, ), default).astype(dtype)
+    for idx, label in enumerate(convert_to_str(labels)):
+        if label in mapping:
+            result[..., mapping[label]] = np.logical_or(result[..., mapping[label]], array[..., idx])
+    
+    return result
+
+def rearrange_labels_dense(array, labels, mapping, default = 0, ** kwargs):
+    dtype = array.dtype
+    
+    table = build_lookup_table(labels, mapping, default = default)
+    return tf.cast(table.lookup(tf.cast(array, tf.int32)), dtype)
+
+def rearrange_labels_sparse_one_hot(array, labels, mapping, default = 0, ** kwargs):
+    mapping = build_mapping(mapping, output_format = 'tensor')
+    
+    new_indices, new_values = array.indices, array.values
+    new_shape = tf.concat([
+        array.dense_shape[:-1], tf.cast(tf.reshape(tf.shape(mapping)[0], [-1]), tf.int64)
+    ], axis = -1)
+
+    if tf.shape(array.indices)[0] > 0:
+        new_last_index = rearrange_labels_dense(array.indices[:, -1:], labels, mapping, default = default)
+        new_last_index = tf.ensure_shape(new_last_index, (None, 1))
+        
+        new_indices = tf.concat([
+            array.indices[:, :-1], new_last_index
+        ], axis = -1)
+        
+        mask = new_last_index[:, 0] != default
+        new_indices = tf.boolean_mask(new_indices, mask)
+        new_values  = tf.boolean_mask(new_values, mask)
+    
+    return tf.sparse.reorder(tf.sparse.SparseTensor(
+        indices = new_indices, values = new_values, dense_shape = new_shape
+    ))
+
+def rearrange_labels_sparse(array, labels, mapping, default = 0, ** kwargs):
+    new_indices, new_values, new_shape = array.indices, array.values, array.dense_shape
+
+    if tf.shape(array.indices)[0] > 0:
+        new_values = rearrange_labels_dense(array.values, labels, mapping, default = default)
+        
+        mask = new_values != default
+        new_indices = tf.boolean_mask(new_indices, mask)
+        new_values  = tf.boolean_mask(new_values, mask)
+    
+    return tf.sparse.reorder(tf.sparse.SparseTensor(
+        indices = new_indices, values = new_values, dense_shape = new_shape
+    ))
+
+def rearrange_labels_dense_slow(array, labels, mapping, default = 0, ** kwargs):
+    uniques, indexes = np.unique(array, return_inverse = True)
+    indexes = indexes.reshape(array.shape)
+    
+    unique_labels = {labels[idx] : idx for idx in uniques}
+    
+    val_to_idx = {}
+    for i, l in enumerate(mapping):
+        if not isinstance(l, (list, tuple)): l = [l]
+        for l_i in l: val_to_idx[l_i] = i
+    
+    for label, idx in unique_labels.items():
+        if val_to_idx.get(label, default) != idx:
+            array[indexes == idx] = val_to_idx.get(label, default)
+    return array
+
 
 def transform_mask(mask, mode, is_one_hot, max_depth = -1):
     if max_depth == -1 and is_one_hot: max_depth = mask.shape[-1]
@@ -128,148 +283,3 @@ def transform_mask(mask, mode, is_one_hot, max_depth = -1):
             ), tf.uint8)
 
     return mask
-
-def rearrange_labels(array, labels, mapping, default = 0, is_one_hot = None, ** kwargs):
-    """
-        Rearrange the labels given an initial order (`labels`) and a mapping
-        
-        Arguments :
-            - array : the labels to rearrange (supports np.ndarray and tf.sparse.SparseTensor)
-                if `array.shape[-1] == len(labels)`, the array is considered as one-hot encoded
-            - labels    : the list of original labels (i.e. the associated label to any value in `array`)
-            - mapping   : a mapping to map each label in `labels` to a new id
-                - list (of str or list) : each sub-label (i.e. those in the nested lists) are mapped to their list index
-                - dict : each key is a label, and the value is its corresponding index
-            - default   : the default label to set if no mapping is found
-            - kwargs    : additional possible kwargs (mainly ignored)
-        Return :
-            - the rearranged labels
-        
-        Important note :
-            if `array` is not a `tf.sparse.SparseTensor`:
-                The returned value is not a one-hot encoded version (even if the input was)
-            else:
-                All values mapped to `default` are removed from the `Sparse` array
-        
-        Example : 
-            array = np.array([
-                [1, 2, 1],
-                [0, 0, 2]
-                [3, 1, 2]
-            ])
-            labels  = ['l0', 'l1', 'l2', 'l3']
-            # maps 'l3' from index 3 to 1, and maps 'l1' and 'l2' (index 1 and 2) to index 2
-            mapping = ['l0', 'l3', ('l1', 'l2')]
-
-            result == np.array([
-                [2, 2, 2],
-                [0, 0, 2],
-                [1, 2, 2]
-            ])
-    """
-    if is_one_hot is None: is_one_hot  = array.shape[-1] == len(labels)
-    is_sparse   = isinstance(array, tf.sparse.SparseTensor)
-
-    list_mapping = mapping if isinstance(mapping, list) else sorted(mapping.keys(), key = mapping.get)
-    if list_mapping == labels:
-        return array
-    elif list_mapping[0] is None and list_mapping[1 : len(labels) + 1] == labels:
-        return add_zero_label(array, is_one_hot)
-    
-    if is_sparse:
-        if is_one_hot:
-            fn = rearrange_labels_sparse_one_hot
-        else:
-            fn = rearrange_labels_sparse
-    else:
-        if is_one_hot:
-            fn = rearrange_labels_one_hot
-        else:
-            fn = rearrange_labels_dense
-    
-    return fn(array, labels, mapping, default = default, ** kwargs)
-
-def rearrange_labels_one_hot(array, labels, mapping, default = 0, ** kwargs):
-    if isinstance(array, tf.Tensor): array = array.numpy()
-    array = array.astype(bool)
-
-    val_to_idx = mapping
-    if isinstance(mapping, list):
-        val_to_idx = {}
-        for i, l in enumerate(mapping):
-            if not isinstance(l, (list, tuple)): l = [l]
-            for l_i in l: val_to_idx[l_i] = i
-
-    result = np.full(array.shape[:-1], default)
-    for idx, label in enumerate(labels):
-        if label in val_to_idx:
-            result[array[..., idx]] = val_to_idx[label]
-    
-    return result
-
-def rearrange_labels_dense(array, labels, mapping, default = 0, ** kwargs):
-    one_hot = np.equal(
-        np.expand_dims(array, axis = -1),
-        np.arange(np.max(array) + 1).reshape([1] * len(array.shape) + [-1])
-    )
-    return rearrange_labels_one_hot(
-        one_hot, labels, mapping, default, ** kwargs
-    )
-
-def rearrange_labels_sparse_one_hot(array, labels, mapping, default = 0, ** kwargs):
-    last_index          = array.indices[:, -1]
-    one_hot_last_index  = np.equal(
-        np.expand_dims(last_index.numpy(), axis = -1),
-        np.expand_dims(np.arange(array.dense_shape[-1]), axis = 0)
-    )
-    new_last_index      = tf.cast(rearrange_labels_one_hot(
-        one_hot_last_index, labels, mapping, default, ** kwargs
-    ), array.indices.dtype)
-    
-    new_indices = tf.concat([
-        array.indices[:, :-1], tf.expand_dims(new_last_index, axis = -1)
-    ], axis = -1)
-    
-    # filters out labels that do not have any mapping
-    mask    = new_last_index != default
-    new_indices = tf.boolean_mask(new_indices, mask)
-    new_values  = tf.boolean_mask(array.values, mask)
-    
-    return tf.sparse.reorder(tf.sparse.SparseTensor(
-        indices = new_indices,
-        values  = new_values,
-        dense_shape = tuple(array.dense_shape[:-1]) + (len(mapping), )
-    ))
-
-def rearrange_labels_sparse(array, labels, mapping, default = 0, ** kwargs):
-    one_hot_values = np.equal(
-        np.expand_dims(array.values.numpy(), axis = -1),
-        np.expand_dims(np.arange(tf.reduce_max(array.values) + 1), axis = 0)
-    )
-    new_values  = rearrange_labels_one_hot(
-        one_hot_values, labels, mapping, default, ** kwargs
-    )
-    # filters out labels that do not have any mapping
-    mask    = new_values != default
-    new_values  = new_values[mask]
-    new_indices = tf.boolean_mask(array.indices, tf.cast(mask, tf.bool))
-    
-    return tf.sparse.reorder(tf.sparse.SparseTensor(
-        indices = new_indices, values = new_values, dense_shape = array.dense_shape
-    ))
-
-def rearrange_labels_dense_slow(array, labels, mapping, default = 0, ** kwargs):
-    uniques, indexes = np.unique(array, return_inverse = True)
-    indexes = indexes.reshape(array.shape)
-    
-    unique_labels = {labels[idx] : idx for idx in uniques}
-    
-    val_to_idx = {}
-    for i, l in enumerate(mapping):
-        if not isinstance(l, (list, tuple)): l = [l]
-        for l_i in l: val_to_idx[l_i] = i
-    
-    for label, idx in unique_labels.items():
-        if val_to_idx.get(label, default) != idx:
-            array[indexes == idx] = val_to_idx.get(label, default)
-    return array

@@ -16,7 +16,7 @@ import tensorflow as tf
 
 from hparams import HParams
 from utils import infer_downsampling_factor, infer_upsampling_factor, pad_to_multiple
-from utils.image import load_image, augment_image, get_image_augmentation_config
+from utils.image import load_image, augment_image, pad_image, get_image_augmentation_config
 from models.interfaces.base_model import BaseModel
 
 _default_augmentations = ['hue', 'brightness', 'saturation', 'contrast', 'noise']
@@ -62,6 +62,7 @@ class BaseImageModel(BaseModel):
     def _init_image(self,
                     input_size,
                     max_image_size  = None,
+                    resize_method   = 'resize',
                     resize_kwargs   = {},
                     image_normalization = None,
                     ** kwargs
@@ -71,9 +72,13 @@ class BaseImageModel(BaseModel):
                 tuple(_image_normalization_styles.keys()), image_normalization
             ))
 
+        if resize_method not in ('resize', 'pad'):
+            raise ValueError('Unknown resizing method !\n  Accepted : (resize, pad)\n  Got : {}'.format(resize_method))
+        
         if not isinstance(input_size, (list, tuple)): input_size = (input_size, input_size, 3)
         
         self.input_size = tuple(input_size)
+        self.resize_method  = resize_method
         self.resize_kwargs  = resize_kwargs
         self.max_image_size = None if not self.has_variable_input_size else max_image_size
         self.image_normalization    = image_normalization
@@ -85,6 +90,7 @@ class BaseImageModel(BaseModel):
     @property
     def max_image_shape(self):
         if not self.has_variable_input_size or self.max_image_size in (-1, None): return None
+        if isinstance(self.max_image_size, (list, tuple)): return self.max_image_size
         return (self.max_image_size, self.max_image_size)
     
     @property
@@ -131,7 +137,7 @@ class BaseImageModel(BaseModel):
     def training_hparams_image(self):
         config = {}
         if self.has_variable_input_size:
-            if self.max_image_size is None: config['max_image_size'] = None
+            config['max_image_size'] = None
         
         config['image_augmentation_methods'] = self.default_image_augmentation
         return ImageTrainingHParams(** config)
@@ -139,7 +145,8 @@ class BaseImageModel(BaseModel):
     def _str_image(self):
         if self.max_image_shape:
             des = "- Image size : {}\n".format('({})'.format(', '.join(
-                '<= {}'.format(self.max_image_size) if s is None else str(s) for s in self.input_size
+                '<= {}'.format(max_s) if s is None else str(s)
+                for s, max_s in zip(self.input_size, self.max_image_shape)
             )))
         else:
             des = "- Image size : {}\n".format(self.input_size)
@@ -173,12 +180,19 @@ class BaseImageModel(BaseModel):
             if use_box and 'box' in filename: box = filename['box']
             filename = filename['image'] if 'image' in filename else filename['filename']
         
-        if self.has_variable_input_size:
-            tar_shape   = None
-            tar_max_shape = self.max_image_shape
-            tar_mul_shape = self.downsampling_factor if self.should_pad_to_multiple else None
+        tar_shape, tar_max_shape, tar_mul_shape = None, None, None
+        if self.resize_method == 'resize':
+            if self.has_variable_input_size:
+                tar_max_shape   = self.max_image_shape
+                if self.should_pad_to_multiple:
+                    tar_mul_shape   = self.downsampling_factor
+            else:
+                tar_shape       = self.input_size
         else:
-            tar_shape, tar_max_shape, tar_mul_shape = self.input_size, None, None
+            if self.has_variable_input_size:
+                tar_max_shape   = self.max_image_shape
+            else:
+                tar_max_shape   = self.input_size
 
         return load_image(
             filename,
@@ -198,13 +212,18 @@ class BaseImageModel(BaseModel):
         """ Normalizes a (batch of) image by calling the normalization schema """
         return self.image_normalization_fn(image)
 
+    def filter_image(self, image):
+        return tf.reduce_all(tf.shape(image) > 0)
+    
     def augment_image(self, image, ** kwargs):
-        kwargs.setdefault('resize_kwargs', self.resize_kwargs)
         if self.has_variable_input_size:
-            kwargs.setdefault('target_max_shape', self.max_image_shape)
+            kwargs.setdefault('resize_kwargs',      self.resize_kwargs)
+            kwargs.setdefault('target_max_shape',   self.max_image_shape)
             if self.should_pad_to_multiple:
                 kwargs.setdefault('target_multiple_shape', self.downsampling_factor)
-        
+        elif self.resize_method != 'resize':
+            kwargs.setdefault('target_max_shape', self.input_size)
+
         return augment_image(
             image,
             self.image_augmentation_methods,
@@ -214,11 +233,21 @@ class BaseImageModel(BaseModel):
     
     def preprocess_image(self, image, ** kwargs):
         """ Normalizes a (batch of) image by calling the normalization schema """
-        return self.normalize_image(image, ** kwargs)
+        image = self.normalize_image(image, ** kwargs)
+        if self.resize_method == 'pad':
+            image = pad_image(
+                image,
+                target_shape    = self.input_size if not self.has_variable_input_size else None,
+                target_multiple_shape   = self.downsampling_factor if self.should_pad_to_multiple else None,
+                ** self.resize_kwargs
+            )
+        
+        return image
     
     def get_config_image(self, * args, ** kwargs):
         config = {
             'input_size' : self.input_size,
+            'resize_method' : self.resize_method,
             'resize_kwargs' : self.resize_kwargs,
             'image_normalization'   : self.image_normalization
         }

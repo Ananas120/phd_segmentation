@@ -19,9 +19,10 @@ from custom_train_objects.losses.ge2e_seg_loss import average_loss
     tf.SparseTensorSpec(shape = (None, None, None), dtype = tf.float32),
     tf.TensorSpec(shape = (None, None, None), dtype = tf.float32),
     tf.TensorSpec(shape = (), dtype = tf.float32),
+    tf.TensorSpec(shape = (), dtype = tf.float32),
     tf.TensorSpec(shape = (), dtype = tf.bool)
 ])
-def sparse_dice_coeff(y_true, y_pred, smoothing = 0.01, skip_empty = False):
+def sparse_dice_coeff(y_true, y_pred, smoothing = 0.01, threshold = 0., skip_empty = False):
     """
         Computes the Dice coefficient for possibly multi-label segmentation
         
@@ -35,6 +36,10 @@ def sparse_dice_coeff(y_true, y_pred, smoothing = 0.01, skip_empty = False):
             - dice_coeff    : score between [0 (bad), 1 (perfect)]
     """
     # shape = [batch_size, n_labels]
+    if threshold > 0.:
+        y_pred = tf.where(y_pred < threshold, 0., y_pred)
+        y_pred = tf.where(y_pred > 1. - threshold, 1., y_pred)
+    
     intersect   = tf.sparse.reduce_sum(y_true * y_pred, axis = 1)
     union       = tf.sparse.reduce_sum(y_true, axis = 1) + tf.reduce_sum(y_pred, axis = 1)
 
@@ -56,9 +61,10 @@ def sparse_dice_coeff(y_true, y_pred, smoothing = 0.01, skip_empty = False):
     tf.TensorSpec(shape = (None, None, None), dtype = tf.float32),
     tf.TensorSpec(shape = (None, None, None), dtype = tf.float32),
     tf.TensorSpec(shape = (), dtype = tf.float32),
+    tf.TensorSpec(shape = (), dtype = tf.float32),
     tf.TensorSpec(shape = (), dtype = tf.bool)
 ])
-def dice_coeff(y_true, y_pred, smoothing = 0.01, skip_empty = False):
+def dice_coeff(y_true, y_pred, smoothing = 0.01, threshold = 0., skip_empty = False):
     """
         Computes the Dice coefficient for possibly multi-label segmentation
         
@@ -71,6 +77,10 @@ def dice_coeff(y_true, y_pred, smoothing = 0.01, skip_empty = False):
         Return :
             - dice_coeff    : score between [0 (bad), 1 (perfect)]
     """
+    if threshold > 0.:
+        y_pred = tf.where(y_pred < threshold, 0., y_pred)
+        y_pred = tf.where(y_pred > 1. - threshold, 1., y_pred)
+
     # shape = [batch_size, n_labels]
     intersect   = tf.reduce_sum(y_true * y_pred, axis = 1)
     union       = tf.reduce_sum(y_true, axis = 1) + tf.reduce_sum(y_pred, axis = 1)
@@ -93,6 +103,7 @@ def dice_coeff(y_true, y_pred, smoothing = 0.01, skip_empty = False):
 class DiceLoss(tf.keras.losses.Loss):
     def __init__(self,
                  smoothing  = 0.01,
+                 threshold  = 0.,
                  from_logits    = False,
                  skip_empty_frames  = False,
                  skip_empty_labels  = False,
@@ -103,6 +114,7 @@ class DiceLoss(tf.keras.losses.Loss):
                 ):
         super().__init__(name = name, reduction = 'none', ** kwargs)
         self.smoothing  = tf.cast(smoothing, tf.float32)
+        self.threshold  = tf.cast(threshold, tf.float32)
         self.from_logits    = from_logits
         
         self.skip_empty_labels = tf.Variable(
@@ -152,8 +164,9 @@ class DiceLoss(tf.keras.losses.Loss):
         dice = dice_coeff_fn(
             y_true,
             tf.reshape(y_pred, [batch_size, -1, n_classes]),
-            self.smoothing,
-            skip_empty_labels or skip_empty_frames
+            smoothing  = self.smoothing,
+            threshold  = self.threshold,
+            skip_empty = skip_empty_labels or skip_empty_frames
         )
         dice.set_shape([None])
         return 1. - dice, dice
@@ -162,6 +175,7 @@ class DiceLoss(tf.keras.losses.Loss):
         config = super().get_config()
         config.update({
             'smoothing'   : self.smoothing,
+            'threshold'   : self.threshold,
             'from_logits' : self.from_logits
         })
         return config

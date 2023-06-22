@@ -46,9 +46,32 @@ def image_seg_dataset_wrapper(name, task, ** default_config):
                 
         """
         @timer(name = '{} loading'.format(name))
-        def _load_and_process(directory, * args, slice_step = None, slice_size = None, ** kwargs):
+        def _load_and_process(directory,
+                              * args,
+                              
+                              slice_step = None,
+                              slice_size = None,
+                              
+                              output_format = ('stensor', 'tensor', 'npz', 'npy', 'nii.gz'),
+                              
+                              ** kwargs
+                             ):
             dataset = dataset_loader(directory, * args, ** kwargs)
             
+            if output_format:
+                if not isinstance(output_format, (list, tuple)): output_format = [output_format]
+                
+                for row in dataset:
+                    row.update({
+                        'images'       : _find_better_format(
+                            row['images'], output_format, prefix = 'ct'
+                        ),
+                        'segmentation' : _find_better_format(
+                            row['segmentation'], output_format, prefix = 'masks'
+                        )
+                    })
+                    
+                
             if slice_step or slice_size:
                 if not slice_step: slice_step = slice_size
                 
@@ -78,6 +101,19 @@ def image_seg_dataset_wrapper(name, task, ** default_config):
         return fn
     return wrapper
 
+def _find_better_format(original_file, formats, prefix = None):
+    filename = os.path.join(* original_file[0].split(os.path.sep)[:-1]) if isinstance(original_file, list) else original_file
+    
+    basename = filename.split(os.path.sep)
+    basename = basename[-1] if basename[-1] else (basename[-2] + filename[-1])
+    if prefix is None: prefix = basename.split('.')[0]
+
+    candidates = glob.glob(filename.replace(basename, prefix + '*'))
+    for ext in formats:
+        for cand in candidates:
+            if cand.endswith(ext): return cand
+    return original_file
+
 def preprocess_tcia_annots(directory,
                            subset = None,
                            
@@ -103,12 +139,12 @@ def preprocess_tcia_annots(directory,
             
             if seg_file not in all_segs_infos:
                 with dcm.dcmread(seg_file) as seg:
-                    if hasattr(seg, 'StructureSetROISequence'):
-                        organs = [struct.ROIName for struct in seg.StructureSetROISequence]
-                    #elif hasattr(seg, 'SegmentSequence'):
-                    #    organs = [s.SegmentDescription for s in seg.SegmentSequence]
-                    else:
-                        raise RuntimeError('Unknown annotation sequence name for file {} :\n{}'.format(seg_file, seg))
+                    try:
+                        rt_utils.RTStructBuilder.validate_rtstruct(seg)
+                    except Exception:
+                        continue
+                    
+                    organs = [struct.ROIName for struct in seg.StructureSetROISequence]
                     
                     all_segs_infos[seg_file] = {
                         'id'      : str(seg.PatientName),
@@ -122,8 +158,10 @@ def preprocess_tcia_annots(directory,
             
             frames      = sorted([os.path.join(imgs_dir, f) for f in os.listdir(imgs_dir)])
             with dcm.dcmread(frames[0]) as ct1, dcm.dcmread(frames[-1]) as ct2:
-                if ct1.SliceLocation > ct2.SliceLocation: frames = frames[::-1]
-                thickness = ct1.SliceThickness
+                pos1 = rt_utils.image_helper.get_slice_position(ct1)
+                pos2 = rt_utils.image_helper.get_slice_position(ct2)
+                if pos1 > pos2: frames = frames[::-1]
+                thickness = abs((pos1 - pos2) / len(frames))
             
             segmentations_infos.append({
                 'subject_id'      : patient_id,
@@ -135,7 +173,7 @@ def preprocess_tcia_annots(directory,
                 'nb_images'       : len(os.listdir(imgs_dir)),
                 'images'          : frames,
                 'segmentation'    : seg_file,
-                'labels'          : organs
+                'label'           : organs
             })
         
         return segmentations_infos
@@ -146,6 +184,7 @@ def preprocess_tcia_annots(directory,
             series.extend(parse_serie(os.path.join(client_dir, serie_dir), i))
         return series
     
+    import rt_utils
     import pydicom as dcm
 
     data_dir = [os.path.join(directory, d) for d in os.listdir(directory) if os.path.isdir(os.path.join(directory, d))]
@@ -190,7 +229,6 @@ def preprocess_totalsegmentator_annots(directory, combined_mask = ('masks.npz', 
         
         metadata.append({
             'subject_id'      : client_id,
-            'thickness'       : -1,
             'images'          : os.path.join(client_dir, 'ct.nii.gz'),
             'segmentation'    : [file for _, file in segmentations] if not mask_file else mask_file,
             'label'           : [organ for organ, _ in segmentations]
@@ -199,14 +237,14 @@ def preprocess_totalsegmentator_annots(directory, combined_mask = ('masks.npz', 
     return metadata
 
 tcia_manifests = {
-    'LSTCS'        : 'manifest-1557326747206',
+    'LCTSC'        : 'manifest-1557326747206',
     'Radiomics'    : 'manifest-1603198545583',
     'Pediatric-CT' : 'manifest-1647979711903'
 }
 
 if os.path.exists(TCIA_DIR):
     image_seg_dataset_wrapper(
-        name  = 'LSTCS',
+        name  = 'LCTSC',
         task  = IMAGE_SEGMENTATION,
         train = {'directory' : os.path.join(TCIA_DIR, 'manifest-1557326747206'), 'subset' : 'Train'},
         valid = {'directory' : os.path.join(TCIA_DIR, 'manifest-1557326747206'), 'subset' : 'Test'}

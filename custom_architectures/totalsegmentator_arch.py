@@ -8,6 +8,10 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+
+import os
+import logging
+import numpy as np
 import tensorflow as tf
 import tensorflow_addons as tfa
 
@@ -15,6 +19,59 @@ from pathlib import Path
 
 from custom_layers import get_activation
 from custom_architectures.current_blocks import _get_var, _get_concat_layer
+
+logger = logging.getLogger(__name__)
+
+TOTALSEGMENTATOR_URL    = 'http://94.16.105.223/static'
+TOTALSEGMENTATOR_MODELS = {
+    # the 5 parts of the full resolution model
+    'Task251_TotalSegmentator_part1_organs_1139subj' : {
+        'task_id' : 251, 'task' : 'organs', 'url' : '{base_url}/{name}.zip'
+    },
+    'Task252_TotalSegmentator_part2_vertebrae_1139subj' : {
+        'task_id' : 252, 'task' : 'vertebrae', 'url' : '{base_url}/{name}.zip'
+    },
+    'Task253_TotalSegmentator_part3_cardiac_1139subj' : {
+        'task_id' : 253, 'task' : 'cardiac', 'url' : '{base_url}/{name}.zip'
+    },
+    'Task254_TotalSegmentator_part4_muscles_1139subj' : {
+        'task_id' : 254, 'task' : 'muscles', 'url' : '{base_url}/{name}.zip'
+    },
+    'Task255_TotalSegmentator_part5_ribs_1139subj' : {
+        'task_id' : 255, 'task' : 'ribs', 'url' : '{base_url}/{name}.zip'
+    },
+    # low resolution model (all classes at once)
+    'Task256_TotalSegmentator_3mm_1139subj' : {
+        'task_id' : 256, 'task' : 'total', 'url' : '{base_url}/{name}.zip'
+    },
+    # custom models from authors
+    'Task269_Body_extrem_6mm_1200subj' : {
+        'task_id' : 256, 'task' : 'body_extrem', 'url' : '{base_url}/{name}.zip'
+    },    
+    # custom models from constributor ?
+    'Task258_lung_vessels_248subj' : {
+        'task_id' : 258, 'task' : 'lung_vessels', 'url' : 'https://zenodo.org/record/7234263/files/{name}.zip?download=1'
+    },
+    'Task150_icb_v0' : {
+        'task_id' : 150, 'task' : 'icb', 'url' : 'https://zenodo.org/record/7079161/files/{name}.zip?download=1'
+    },
+    'Task260_hip_implant_71subj' : {
+        'task_id' : 260, 'task' : 'hip_implant', 'url' : 'https://zenodo.org/record/7234263/files/{name}.zip?download=1'
+    },
+    'Task503_cardiac_motion'     : {
+        'task_id' : 503, 'task' : 'cardiac_motion', 'url' : 'https://zenodo.org/record/7271576/files/{name}.zip?download=1'
+    },
+    'Task273_Body_extrem_1259subj'     : {
+        'task_id' : 273, 'task' : 'body_extrem', 'url' : 'https://zenodo.org/record/7510286/files/{name}.zip?download=1'
+    },
+    'Task315_thoraxCT'     : {
+        'task_id' : 315, 'task' : 'thorax_ct', 'url' : 'https://zenodo.org/record/7510288/files/{name}.zip?download=1'
+    },
+    'Task008_HepaticVessel'     : {
+        'task_id' : 8, 'task' : 'hepatic_vessel', 'url' : 'https://zenodo.org/record/7573746/files/{name}.zip?download=1'
+    }
+}
+
 
 def l2_normalize(x, axis = -1):
     import tensorflow as tf
@@ -47,10 +104,13 @@ def ConvBlock(x,
     
     for i in range(n):
         padding_i = padding
-        if kernel_size >= 3 and padding == 'same' and manual_padding:
+        
+        if not isinstance(kernel_size, (tuple, np.ndarray)): kernel_size = (kernel_size, kernel_size, kernel_size)
+        kernel_size = np.array(kernel_size)
+        if np.any(kernel_size >= 3) and padding == 'same' and manual_padding:
             padding_i = 'valid'
             pad = kernel_size // 2
-            x = tf.keras.layers.ZeroPadding3D(((pad, pad), (pad, pad), (pad, pad)))(x)
+            x = tf.keras.layers.ZeroPadding3D(((pad[0], pad[0]), (pad[1], pad[1]), (pad[2], pad[2])))(x)
         
         if duplicate_i:
             conv_name = '{}/{}/blocks/{}/conv'.format(name, i, i) if name else None
@@ -69,7 +129,7 @@ def ConvBlock(x,
     return x
 
 def TotalSegmentator(input_shape    = (None, None, None, 1),
-                     output_dim     = 104,
+                     output_dim     = None,
                      normalize_output = False,
                      norm_type      = 'instance',
          
@@ -91,7 +151,10 @@ def TotalSegmentator(input_shape    = (None, None, None, 1),
       
                      mixed_precision     = False,
          
-                     pretrained = (256, 'Task256_TotalSegmentator_3mm_1139subj'),
+                     pretrained         = None,
+                     pretrained_task    = None,
+                     pretrained_task_id = None,
+                     pretrained_ckpt    = 'model_final_checkpoint',
                      transfer_kwargs = {},
        
                      name   = None,
@@ -99,6 +162,16 @@ def TotalSegmentator(input_shape    = (None, None, None, 1),
                     ):
     if not isinstance(input_shape, tuple): input_shape = (input_shape, input_shape, 3)
 
+    if pretrained or pretrained_task or pretrained_task_id:
+        infos = get_nnunet_plans(model_name = pretrained, task = pretrained_task, task_id = pretrained_task_id)
+        
+        n_stages    = len(infos['plans_per_stage'][0]['conv_kernel_sizes'])
+        kernel_size = [tuple(sizes) for sizes in infos['plans_per_stage'][0]['conv_kernel_sizes']]
+        strides     = [tuple(sizes) for sizes in infos['plans_per_stage'][0]['pool_op_kernel_sizes']]
+        strides     = [1] * (n_stages - len(strides)) + strides
+        n_conv_per_stage = infos['conv_per_stage']
+        if not output_dim: output_dim = infos['num_classes'] + 1
+    
     if mixed_precision:
         policy = tf.keras.mixed_precision.Policy('mixed_float16')
         tf.keras.mixed_precision.set_global_policy(policy)
@@ -135,9 +208,9 @@ def TotalSegmentator(input_shape    = (None, None, None, 1),
     for i in range(n_stages - 1):
         x = tf.keras.layers.Conv3DTranspose(
             filters     = _get_var(filters, n_stages - i - 2),
-            kernel_size = 2 if i > 0 else 1,
+            kernel_size = _get_var(strides, n_stages - i - 1),
             use_bias    = False,
-            strides     = 2 if i > 0 else 1,
+            strides     = _get_var(strides, n_stages - i - 1),
             padding     = 'same',
             activation  = _get_var(upsampling_activation, i),
             name        = 'tu/{}'.format(i)
@@ -173,25 +246,94 @@ def TotalSegmentator(input_shape    = (None, None, None, 1),
     
     model = tf.keras.Model(inputs = inputs, outputs = outputs[::-1], name = name)
     
-    if pretrained:
-        import totalsegmentator.libs
-        
-        from nnunet.training.model_restore import load_model_and_checkpoint_files
-
+    if pretrained or pretrained_task or pretrained_task_id:
         from models.weights_converter import name_based_partial_transfer_learning
         
-        model_path = Path.home() /'.totalsegmentator/nnunet/results/nnUNet' / '3d_fullres' / pretrained[1]
-        model_path = model_path / 'nnUNetTrainerV2_ep8000_nomirror__nnUNetPlansv2.1'
+        state_dict = load_nnunet_model(
+            model_name = pretrained, task = pretrained_task, task_id = pretrained_task_id, ckpt = pretrained_ckpt
+        )
 
-        totalsegmentator.libs.download_pretrained_weights(pretrained[0])
-
-        ckpt = 'model_final_checkpoint'
-
-        trainer, params = load_model_and_checkpoint_files(str(model_path), checkpoint_name = ckpt)
-        trainer.load_checkpoint_ram(params[0], False)
-        name_based_partial_transfer_learning(model, trainer.network.cpu(), ** transfer_kwargs)
+        name_based_partial_transfer_learning(model, state_dict, ** transfer_kwargs)
     
     return model
+
+def get_totalsegmentator_model_name(model_name = None, task_id = None, task = None):
+    """ Returns the key in TOTALSEGMENTATOR_MODELS for the given task / task_id """
+    def _assert_available(value, availables, label):
+        if value not in availables:
+            raise ValueError('Unknown {} !\n  Accepted : {}\n  Got : {}'.format(
+                label, tuple(availables.keys(), value)
+            ))
+
+    assert model_name or task or task_id is not None
+    
+    if model_name is not None:
+        _assert_available(model_name, TOTALSEGMENTATOR_MODELS, 'model')
+        return model_name
+    
+    if task is not None:
+        task_to_model = {infos['task'] : name for name, infos in TOTALSEGMENTATOR_MODELS.items()}
+        _assert_available(task, task_to_model, 'task')
+        return task_to_model[task]
+    
+    if task is not None:
+        task_id_to_model = {infos['task_id'] : name for name, infos in TOTALSEGMENTATOR_MODELS.items()}
+        _assert_available(task_id, task_id_to_model, 'task')
+        return task_id_to_model[task_id]
+
+def get_nnunet_plans(model_name = None, ** kwargs):
+    from utils import load_data
+    
+    if not model_name: model_name = get_totalsegmentator_model_name(** kwargs)
+    model_dir = download_nnunet(model_name = model_name)
+    
+    return load_data(os.path.join(model_dir, 'plans.pkl'))
+
+def load_nnunet_model(model_name = None, ckpt = 'model_final_checkpoint', fold = None, ** kwargs):
+    import torch
+    
+    if not model_name: model_name = get_totalsegmentator_model_name(** kwargs)
+    model_dir = download_nnunet(model_name = model_name)
+    
+    if not fold:
+        folds = [f for f in os.listdir(model_dir) if f.startswith('fold_')]
+        logger.info('Available folds ({} used) : {}'.format(folds[0], folds))
+        fold = folds[0]
+    
+    ckpt_file = os.path.join(model_dir, fold, ckpt + '.model')
+    
+    return torch.load(ckpt_file, map_location = 'cpu')['state_dict']
+
+def download_nnunet(model_name = None, url = None):
+    from models import _pretrained_models_folder
+
+    if url is None:
+        url = TOTALSEGMENTATOR_MODELS[model_name]['url']
+    if model_name is None:
+        model_name = os.path.basename(url).split('.')[0]
+    
+    if '{' in url: url = url.format(base_url = TOTALSEGMENTATOR_URL, name = model_name)
+    base_dir = os.path.join(_pretrained_models_folder, 'pretrained_weights')
+    model_dir = os.path.join(base_dir, model_name)
+    
+    if not os.path.exists(model_dir):
+        import zipfile
+        
+        from utils import download_file
+        
+        logger.info('Downloading files for model {} at : {}'.format(model_name, url))
+        filename = download_file(url, directory = base_dir)
+
+        if filename is None:
+            raise RuntimeError('Error while downloading (`filename is None`)')
+        
+        logger.info('Extracting files...')
+        with zipfile.ZipFile(filename, 'r') as file:
+            file.extractall(base_dir)
+        
+        #os.remove(filename)
+
+    return os.path.join(model_dir, os.listdir(model_dir)[0])
 
 custom_functions    = {
     'TotalSegmentator'    : TotalSegmentator
