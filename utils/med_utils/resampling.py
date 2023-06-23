@@ -109,8 +109,8 @@ def resample_volume(volume,
 
 def _resample_tensorflow(volume,
                          target_shape   = None,
-                         interpolation  = 'bilinear',
-                         preserve_aspect_ratio  = True,
+                         interpolation  = 'bicubic',
+                         preserve_aspect_ratio  = False,
                          ** kwargs
                         ):
     """ `volume` is a `tf.Tensor` of 2D (image), 3D (volume) or 4D (volume + temporal) """

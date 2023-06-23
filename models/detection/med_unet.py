@@ -22,6 +22,7 @@ from utils import convert_to_str
 from models.interfaces.base_image_model import BaseImageModel
 from utils.med_utils import load_medical_data, save_medical_data, build_mapping, crop_then_reshape, pad_or_crop
 
+logger      = logging.getLogger(__name__)
 time_logger = logging.getLogger('timer')
 
 def _get_step_size(image_shape, patch_size, step_size):
@@ -125,7 +126,8 @@ class MedUNet(BaseImageModel):
             image_normalization = plans['dataset_properties']['intensityproperties'][0]
             kwargs.update({
                 'pretrained'      : pretrained,
-                'pretrained_name' : pretrained
+                'pretrained_name' : pretrained,
+                'resize_kwargs'   : {'interpolation' : 'bicubic', 'preserve_aspect_ratio' : False}
             })
         
         if isinstance(image_normalization, dict):
@@ -272,14 +274,18 @@ class MedUNet(BaseImageModel):
             )
         else:
             pred = self(volume, training = False)
-            if use_argmax: pred = tf.argmax(pred, axis = -1)
+            if use_argmax: pred = tf.argmax(pred, axis = -1, output_type = tf.int32)
         
         return _remove_padding(pred)
 
     def _infer_with_patch(self, volume, patch_size, step_size = 0.5, use_argmax = False, ** kwargs):
         steps = _get_step_size(volume.shape[1:-1], patch_size, step_size)
 
-        print('steps : {}'.format(steps))
+        if tf.reduce_any(tf.shape(volume)[1 : -1] < tf.cast(patch_size, tf.int32)):
+            volume = tf.pad(volume, [
+                (0, 0), * [(0, max(0, patch_size[i] - volume.shape[i + 1])) for i in range(len(patch_size))], (0, 0)
+            ])
+        logger.info('volume shape : {} - steps : {}'.format(volume.shape, steps))
 
         gaussian = _get_gaussian(patch_size, 1. / 8.)
         gaussian = np.reshape(gaussian, [1, * gaussian.shape, 1])
@@ -421,7 +427,8 @@ class MedUNet(BaseImageModel):
             
             crop_mode    = self.crop_mode,
             pad_value    = self.pad_value,
-            pad_mode     = 'after'
+            pad_mode     = 'after',
+            ** self.resize_kwargs
         )
         if mask is not None:
             normalized, mask = normalized

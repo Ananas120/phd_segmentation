@@ -17,6 +17,7 @@ import tensorflow_addons as tfa
 
 from pathlib import Path
 
+from utils.med_utils.label_utils import TOTALSEGMENTATOR_LABELS 
 from custom_layers import get_activation
 from custom_architectures.current_blocks import _get_var, _get_concat_layer
 
@@ -68,7 +69,7 @@ TOTALSEGMENTATOR_MODELS = {
     },
     # low resolution model (all classes at once)
     'Task256_TotalSegmentator_3mm_1139subj' : {
-        'task_id' : 256, 'task' : 'total', 'url' : '{base_url}/{name}.zip'
+        'task_id' : 256, 'task' : 'total', 'url' : '{base_url}/{name}.zip', 'classes' : TOTALSEGMENTATOR_LABELS
     },
     # custom models from authors
     'Task269_Body_extrem_6mm_1200subj' : {
