@@ -15,12 +15,51 @@ import numpy as np
 import pandas as pd
 import tensorflow as tf
 
+from scipy.ndimage.filters import gaussian_filter
+
 from loggers import timer
 from utils import convert_to_str
 from models.interfaces.base_image_model import BaseImageModel
 from utils.med_utils import load_medical_data, save_medical_data, build_mapping, crop_then_reshape, pad_or_crop
 
 time_logger = logging.getLogger('timer')
+
+def _get_step_size(image_shape, patch_size, step_size):
+    patch_size     = np.array(patch_size)
+    image_shape    = np.array(image_shape)
+    
+    step_in_voxels = patch_size * step_size
+    
+    num_steps = np.ceil((image_shape - patch_size) / step_in_voxels).astype(np.int32) + 1
+    
+    steps = []
+    for shape_i, patch_i, steps_i in zip(image_shape, patch_size, num_steps):
+        if steps_i > 1:
+            max_step = shape_i - patch_i
+            actual_step_size = max_step / (steps_i - 1)
+            
+            steps.append(np.round(np.arange(steps_i) * actual_step_size).astype(np.int32))
+        else:
+            steps.append([0])
+        
+    
+    return steps
+
+def _get_gaussian(patch_size, sigma_scale = 1. / 8.):
+    patch_size = np.array(patch_size)
+    
+    center = patch_size // 2
+    sigmas = patch_size * sigma_scale
+    
+    gaussian = np.zeros(patch_size)
+    gaussian[tuple(center)] = 1
+    gaussian = gaussian_filter(gaussian, sigmas, 0., mode = 'constant', cval = 0)
+    gaussian = gaussian / np.max(gaussian)
+    
+    mask = gaussian == 0
+    gaussian[mask] = np.min(gaussian[~mask])
+    
+    return gaussian.astype(np.float32)
 
 def _parse_data(data, key, get_frames = True, ** kwargs):
     filename, start, end = data, -1, -1
@@ -30,6 +69,17 @@ def _parse_data(data, key, get_frames = True, ** kwargs):
             if 'end_frame' in data:   end = data['end_frame']
         filename = data[key]
     return filename, start, end
+
+def build_normalization_with_clip(mean, sd, percentile_00_5, percentile_99_5, ** kwargs):
+    def normalize(data):
+        data = tf.clip_by_value(data, percentile_00_5, percentile_99_5)
+        return (data - mean) / sd
+    
+    mean = np.reshape(mean, [1, 1, 1, -1])
+    sd   = np.reshape(sd, [1, 1, 1, -1])
+    percentile_00_5 = np.reshape(percentile_00_5, [1, 1, 1, -1])
+    percentile_99_5 = np.reshape(percentile_99_5, [1, 1, 1, -1])
+    return normalize
 
 class MedUNet(BaseImageModel):
     def __init__(self,
@@ -41,19 +91,54 @@ class MedUNet(BaseImageModel):
                  
                  n_frames   = 1,
                  slice_axis = 2,
+                 transpose  = None,
                  
                  nb_class      = None,
                  pad_value     = None,
                  
                  mapping       = None,
                  
+                 image_normalization = None,
+                 
+                 pretrained         = None,
+                 pretrained_task    = None,
+                 pretrained_task_id = None,
+
                  ** kwargs
                 ):
-        self._init_image(input_size = input_size, resize_method = resize_method, ** kwargs)
+        if pretrained or pretrained_task or pretrained_task_id:
+            from custom_architectures.totalsegmentator_arch import get_nnunet_plans, get_totalsegmentator_model_infos
+            
+            pretrained, infos = get_totalsegmentator_model_infos(pretrained, task = pretrained_task, task_id = pretrained_task_id)
+            
+            plans = get_nnunet_plans(model_name = pretrained)
+            
+            n_frames   = -1
+            voxel_dims = plans['plans_per_stage'][0]['current_spacing']
+            transpose  = [2, 1, 0]
+            if labels is not None and not labels:
+                if 'classes' in infos:
+                    labels = infos['classes']
+                else:
+                    labels = [None] + plans['all_classes']
+            
+            image_normalization = plans['dataset_properties']['intensityproperties'][0]
+            kwargs.update({
+                'pretrained'      : pretrained,
+                'pretrained_name' : pretrained
+            })
+        
+        if isinstance(image_normalization, dict):
+            kwargs['image_normalization_fn'] = build_normalization_with_clip(** image_normalization)
+        
+        self._init_image(
+            input_size = input_size, resize_method = resize_method, image_normalization = image_normalization, ** kwargs
+        )
         self.voxel_dims = voxel_dims
         
         self.n_frames   = max(n_frames, 1) if n_frames is not None and n_frames >= 0 else None
         self.slice_axis = slice_axis
+        self.transpose  = transpose
         self.pad_value  = pad_value
         
         if labels is None and nb_class is None:
@@ -61,7 +146,7 @@ class MedUNet(BaseImageModel):
             self.nb_class = None
         else:
             self.labels   = list(labels) if not isinstance(labels, str) else [labels]
-            self.nb_class = max(1, nb_class if nb_class is not None else len(self.labels))
+            self.nb_class = max(max(1, nb_class if nb_class is not None else 1), len(self.labels))
             if self.nb_class > len(self.labels):
                 self.labels += [''] * (self.nb_class - len(self.labels))
         
@@ -139,9 +224,9 @@ class MedUNet(BaseImageModel):
     def __str__(self):
         des = super().__str__()
         des += self._str_image()
-        if self.labels:
+        if self.labels is not None:
             des += "- Labels (n = {}) : {}\n".format(len(self.labels), self.labels)
-        if self.voxel_dims:
+        if self.voxel_dims is not None:
             des += "- Voxel dims : {}\n".format(self.voxel_dims)
         if self.is_3d:
             des += "- # frames (axis = {}) : {}\n".format(self.slice_axis, self.n_frames if self.n_frames else 'variable')
@@ -150,14 +235,23 @@ class MedUNet(BaseImageModel):
     @timer
     def infer(self, data, win_len = -1, hop_len = -1, use_argmax = False, ** kwargs):
         def _remove_padding(output):
-            return output[0, : data.shape[0], : data.shape[1], : data.shape[2]]
+            output = output[0, : data.shape[0], : data.shape[1], : data.shape[2]]
+            if self.transpose:
+                transpose_fn = np.transpose if isinstance(output, np.ndarray) else tf.transpose
+                output = transpose_fn(output, self.transpose + ([3] if not use_argmax else []))
+            return output
+        
+        if not self.has_variable_input_size: win_len = self.input_shape
+        if not isinstance(win_len, int): win_len = tuple(win_len)
         
         unbatched_rank = 4 if self.is_3d else 3
         if len(data.shape) == unbatched_rank + 1: data = data[0]
         
-        volume = tf.expand_dims(self.preprocess_input(data), axis = 0)
+        volume = self.preprocess_input(data) if not isinstance(win_len, tuple) else data
+        volume = tf.expand_dims(volume, axis = 0)
 
         if not self.is_3d:
+            if isinstance(win_len, tuple): raise ValueError('Model is 2D and therefore does not support inference with patch !')
             return _remove_padding(self._infer_2d(
                 volume, win_len = win_len, use_argmax = use_argmax, ** kwargs
             ))
@@ -166,7 +260,11 @@ class MedUNet(BaseImageModel):
         if win_len == -1: win_len = self.max_frames if self.max_frames not in (None, -1) else tf.shape(volume)[-2]
         if hop_len == -1: hop_len = win_len
         
-        if win_len > 0 and win_len < volume.shape[-2]:
+        if isinstance(win_len, tuple):
+            pred = self._infer_with_patch(
+                volume, win_len, use_argmax = use_argmax, ** kwargs
+            )
+        elif win_len > 0 and win_len < volume.shape[-2]:
             infer_fn = self._infer_with_overlap if hop_len != win_len else self._infer_without_overlap
             
             pred = infer_fn(
@@ -178,8 +276,48 @@ class MedUNet(BaseImageModel):
         
         return _remove_padding(pred)
 
+    def _infer_with_patch(self, volume, patch_size, step_size = 0.5, use_argmax = False, ** kwargs):
+        steps = _get_step_size(volume.shape[1:-1], patch_size, step_size)
+
+        print('steps : {}'.format(steps))
+
+        gaussian = _get_gaussian(patch_size, 1. / 8.)
+        gaussian = np.reshape(gaussian, [1, * gaussian.shape, 1])
+
+        pred   = np.zeros(volume.shape[:-1] + [self.last_dim], dtype = np.float32)
+        counts = np.zeros(volume.shape, dtype = np.float32)
+        for start_x in steps[0]:
+            for start_y in steps[1]:
+                for start_z in steps[2]:
+                    pred_patch = self(volume[
+                        :, # batch axis
+                        start_x : start_x + patch_size[0],
+                        start_y : start_y + patch_size[1],
+                        start_z : start_z + patch_size[2]
+                    ], training = False)
+                    if use_argmax: pred_patch = tf.nn.softmax(pred_patch, axis = -1)
+                    
+                    pred_patch = pred_patch.numpy() * gaussian
+
+                    pred[
+                        :,
+                        start_x : start_x + patch_size[0],
+                        start_y : start_y + patch_size[1],
+                        start_z : start_z + patch_size[2]
+                    ] += pred_patch
+
+                    counts[
+                        :,
+                        start_x : start_x + patch_size[0],
+                        start_y : start_y + patch_size[1],
+                        start_z : start_z + patch_size[2]
+                    ] += gaussian
+
+        pred = (pred / counts).astype(np.float32)
+        return pred if not use_argmax else np.argmax(pred, axis = -1).astype(np.int32)
+
     def _infer_with_overlap(self, volume, win_len = -1, hop_len = -1, use_argmax = False, ** kwargs):
-        n_slices = tf.cast(tf.math.ceil((tf.shape(volume)[-2] - win_len) / hop_len), tf.int32)
+        n_slices = tf.cast(tf.math.ceil((tf.shape(volume)[-2] - win_len + 1) / hop_len), tf.int32)
         
         pad = n_slices * hop_len + win_len - volume.shape[-2]
         if pad > 0:
@@ -202,7 +340,7 @@ class MedUNet(BaseImageModel):
             time_logger.stop_timer('post-processing')
 
         pred = pred / count
-        return pred if not use_argmax else np.argmax(pred, axis = -1)
+        return pred if not use_argmax else np.argmax(pred, axis = -1).astype(np.int32)
     
     @tf.function(reduce_retracing = True, experimental_follow_type_hints = True)
     def _infer_without_overlap(self,
@@ -212,11 +350,10 @@ class MedUNet(BaseImageModel):
                                use_argmax = False,
                                ** kwargs
                               ):
-        n_slices = tf.cast(tf.math.ceil((tf.shape(volume)[-2] - win_len) / hop_len), tf.int32)
+        n_slices = tf.cast(tf.math.ceil(tf.shape(volume)[-2] / win_len), tf.int32)
         
-        pad = n_slices * hop_len + win_len - volume.shape[-2]
+        pad = n_slices * win_len - tf.shape(volume)[-2]
         if pad > 0:
-            n_slices += 1
             volume = tf.pad(volume, [(0, 0), (0, 0), (0, 0), (0, pad), (0, 0)])
         
         pred     = tf.TensorArray(
@@ -313,6 +450,9 @@ class MedUNet(BaseImageModel):
         )
         image = tf.ensure_shape(image, (None, None) if not self.is_3d else (None, None, None))
         
+        if self.transpose is not None:
+            image = tf.transpose(image, self.transpose)
+        
         if self.input_size[-1] == 1:
             image = tf.expand_dims(image, axis = -1)
         
@@ -341,6 +481,8 @@ class MedUNet(BaseImageModel):
         mask.indices.set_shape([None, 3 if not self.is_3d else 4])
         mask.dense_shape.set_shape([3 if not self.is_3d else 4])
 
+        if self.transpose is not None:
+            mask = tf.sparse.transpose(mask, self.transpose + [3])
         return mask
 
     def filter_input(self, image):
@@ -392,6 +534,7 @@ class MedUNet(BaseImageModel):
             
             'n_frames'   : self.n_frames,
             'slice_axis' : self.slice_axis,
+            'transpose'  : self.transpose,
             'pad_value'  : self.pad_value,
             
             'labels'     : self.labels,

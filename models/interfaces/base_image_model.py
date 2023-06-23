@@ -65,9 +65,10 @@ class BaseImageModel(BaseModel):
                     resize_method   = 'resize',
                     resize_kwargs   = {},
                     image_normalization = None,
+                    image_normalization_fn = None,
                     ** kwargs
                    ):
-        if image_normalization not in _image_normalization_styles:
+        if image_normalization_fn is None and image_normalization not in _image_normalization_styles:
             raise ValueError('Unknown normalization style !\n  Accepted : {}\n  Got : {}'.format(
                 tuple(_image_normalization_styles.keys()), image_normalization
             ))
@@ -83,7 +84,9 @@ class BaseImageModel(BaseModel):
         self.max_image_size = None if not self.has_variable_input_size else max_image_size
         self.image_normalization    = image_normalization
         
-        self.image_normalization_fn = _image_normalization_styles[image_normalization]
+        if image_normalization_fn is None:
+            image_normalization_fn = _image_normalization_styles[image_normalization]
+        self.image_normalization_fn = image_normalization_fn
         self._downsampling_factor   = None
         self._upsampling_factor     = None
     

@@ -22,23 +22,49 @@ from custom_architectures.current_blocks import _get_var, _get_concat_layer
 
 logger = logging.getLogger(__name__)
 
+TOTALSEGMENTATOR_LABELS = [
+    None, 'spleen', 'kidney_right', 'kidney_left', 'gallbladder', 'liver', 'stomach', 'aorta', 'inferior_vena_cava', 'portal_vein_and_splenic_vein', 'pancreas', 'adrenal_gland_right', 'adrenal_gland_left', 'lung_upper_lobe_left', 'lung_lower_lobe_left', 'lung_upper_lobe_right', 'lung_middle_lobe_right', 'lung_lower_lobe_right', 'vertebrae_L5', 'vertebrae_L4', 'vertebrae_L3', 'vertebrae_L2', 'vertebrae_L1', 'vertebrae_T12', 'vertebrae_T11', 'vertebrae_T10', 'vertebrae_T9', 'vertebrae_T8', 'vertebrae_T7', 'vertebrae_T6', 'vertebrae_T5', 'vertebrae_T4', 'vertebrae_T3', 'vertebrae_T2', 'vertebrae_T1', 'vertebrae_C7', 'vertebrae_C6', 'vertebrae_C5', 'vertebrae_C4', 'vertebrae_C3', 'vertebrae_C2', 'vertebrae_C1', 'esophagus', 'trachea', 'heart_myocardium', 'heart_atrium_left', 'heart_ventricle_left', 'heart_atrium_right', 'heart_ventricle_right', 'pulmonary_artery', 'brain', 'iliac_artery_left', 'iliac_artery_right', 'iliac_vena_left', 'iliac_vena_right', 'small_bowel', 'duodenum', 'colon', 'rib_left_1', 'rib_left_2', 'rib_left_3', 'rib_left_4', 'rib_left_5', 'rib_left_6', 'rib_left_7', 'rib_left_8', 'rib_left_9', 'rib_left_10', 'rib_left_11', 'rib_left_12', 'rib_right_1', 'rib_right_2', 'rib_right_3', 'rib_right_4', 'rib_right_5', 'rib_right_6', 'rib_right_7', 'rib_right_8', 'rib_right_9', 'rib_right_10', 'rib_right_11', 'rib_right_12', 'humerus_left', 'humerus_right', 'scapula_left', 'scapula_right', 'clavicula_left', 'clavicula_right', 'femur_left', 'femur_right', 'hip_left', 'hip_right', 'sacrum', 'face', 'gluteus_maximus_left', 'gluteus_maximus_right', 'gluteus_medius_left', 'gluteus_medius_right', 'gluteus_minimus_left', 'gluteus_minimus_right', 'autochthon_left', 'autochthon_right', 'iliopsoas_left', 'iliopsoas_right', 'urinary_bladder'
+]
+
 TOTALSEGMENTATOR_URL    = 'http://94.16.105.223/static'
 TOTALSEGMENTATOR_MODELS = {
     # the 5 parts of the full resolution model
     'Task251_TotalSegmentator_part1_organs_1139subj' : {
-        'task_id' : 251, 'task' : 'organs', 'url' : '{base_url}/{name}.zip'
+        'task_id' : 251, 'task' : 'organs', 'url' : '{base_url}/{name}.zip', 'classes' : [
+            None, 'spleen', 'kidney_right', 'kidney_left', 'gallbladder', 'liver', 'stomach', 'aorta', 'inferior_vena_cava',
+            'portal_vein_and_splenic_vein', 'pancreas', 'adrenal_gland_right', 'adrenal_gland_left', 'lung_upper_lobe_left',
+            'lung_lower_lobe_left', 'lung_upper_lobe_right', 'lung_middle_lobe_right', 'lung_lower_lobe_right'
+        ]
     },
     'Task252_TotalSegmentator_part2_vertebrae_1139subj' : {
-        'task_id' : 252, 'task' : 'vertebrae', 'url' : '{base_url}/{name}.zip'
+        'task_id' : 252, 'task' : 'vertebrae', 'url' : '{base_url}/{name}.zip', 'classes' : [
+            None, 'vertebrae_L5', 'vertebrae_L4', 'vertebrae_L3', 'vertebrae_L2', 'vertebrae_L1', 'vertebrae_T12', 'vertebrae_T11',
+            'vertebrae_T10', 'vertebrae_T9', 'vertebrae_T8', 'vertebrae_T7', 'vertebrae_T6', 'vertebrae_T5', 'vertebrae_T4',
+            'vertebrae_T3', 'vertebrae_T2', 'vertebrae_T1', 'vertebrae_C7', 'vertebrae_C6', 'vertebrae_C5', 'vertebrae_C4',
+            'vertebrae_C3', 'vertebrae_C2', 'vertebrae_C1'
+        ]
     },
     'Task253_TotalSegmentator_part3_cardiac_1139subj' : {
-        'task_id' : 253, 'task' : 'cardiac', 'url' : '{base_url}/{name}.zip'
+        'task_id' : 253, 'task' : 'cardiac', 'url' : '{base_url}/{name}.zip', 'classes' : [
+            None, 'esophagus', 'trachea', 'heart_myocardium', 'heart_atrium_left', 'heart_ventricle_left', 'heart_atrium_right',
+            'heart_ventricle_right', 'pulmonary_artery', 'brain', 'iliac_artery_left', 'iliac_artery_right', 'iliac_vena_left',
+            'iliac_vena_right', 'small_bowel', 'duodenum', 'colon', 'urinary_bladder', 'face'
+        ]
     },
     'Task254_TotalSegmentator_part4_muscles_1139subj' : {
-        'task_id' : 254, 'task' : 'muscles', 'url' : '{base_url}/{name}.zip'
+        'task_id' : 254, 'task' : 'muscles', 'url' : '{base_url}/{name}.zip', 'classes' : [
+            None, 'humerus_left', 'humerus_right', 'scapula_left', 'scapula_right', 'clavicula_left', 'clavicula_right',
+            'femur_left', 'femur_right', 'hip_left', 'hip_right', 'sacrum', 'gluteus_maximus_left', 'gluteus_maximus_right',
+            'gluteus_medius_left', 'gluteus_medius_right', 'gluteus_minimus_left', 'gluteus_minimus_right',
+            'autochthon_left', 'autochthon_right', 'iliopsoas_left', 'iliopsoas_right'
+        ]
     },
     'Task255_TotalSegmentator_part5_ribs_1139subj' : {
-        'task_id' : 255, 'task' : 'ribs', 'url' : '{base_url}/{name}.zip'
+        'task_id' : 255, 'task' : 'ribs', 'url' : '{base_url}/{name}.zip', 'classes' : [
+            None, 'rib_left_1', 'rib_left_2', 'rib_left_3', 'rib_left_4', 'rib_left_5', 'rib_left_6', 'rib_left_7', 'rib_left_8',
+            'rib_left_9', 'rib_left_10', 'rib_left_11', 'rib_left_12', 'rib_right_1', 'rib_right_2', 'rib_right_3', 'rib_right_4',
+            'rib_right_5', 'rib_right_6', 'rib_right_7', 'rib_right_8', 'rib_right_9', 'rib_right_10', 'rib_right_11', 'rib_right_12'
+        ]
     },
     # low resolution model (all classes at once)
     'Task256_TotalSegmentator_3mm_1139subj' : {
@@ -280,6 +306,11 @@ def get_totalsegmentator_model_name(model_name = None, task_id = None, task = No
         task_id_to_model = {infos['task_id'] : name for name, infos in TOTALSEGMENTATOR_MODELS.items()}
         _assert_available(task_id, task_id_to_model, 'task')
         return task_id_to_model[task_id]
+
+def get_totalsegmentator_model_infos(model_name = None, ** kwargs):
+    model_name = get_totalsegmentator_model_name(model_name, ** kwargs)
+    
+    return model_name, TOTALSEGMENTATOR_MODELS[model_name]
 
 def get_nnunet_plans(model_name = None, ** kwargs):
     from utils import load_data
