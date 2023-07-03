@@ -71,6 +71,8 @@ def pad_or_crop(img,
     shape = tf.shape(img)
     diff  = shape[:len(target_shape)] - tf.cast(target_shape, shape.dtype)
 
+    skip_mask = mask is None
+    
     if tf.reduce_any(diff < 0):
         if pad_value is None: pad_value = tf.minimum(tf.cast(0, img.dtype), tf.reduce_min(img))
         pad = tf.maximum(- diff, 0)
@@ -99,7 +101,7 @@ def pad_or_crop(img,
         img = tf.pad(
             img, padding, constant_values = pad_value
         )
-        if mask is not None:
+        if not skip_mask:
             if tf.shape(padding)[0] < len(tf.shape(mask)):
                 padding = tf.concat([
                     padding, tf.zeros((len(tf.shape(mask)) - tf.shape(padding)[0], 2), dtype = padding.dtype)
@@ -126,7 +128,7 @@ def pad_or_crop(img,
                 offsets[2] : offsets[2] + target_shape[2]
             ]
         
-        if mask is not None:
+        if not skip_mask:
             if isinstance(mask, tf.sparse.SparseTensor):
                 lengths = target_shape
                 offsets = tf.cast(offsets, tf.int64)
@@ -150,7 +152,7 @@ def pad_or_crop(img,
                         offsets[2] : offsets[2] + target_shape[2]
                     ]
 
-    return img if mask is None else (img, mask)
+    return img if skip_mask else (img, mask)
 
 def crop_then_reshape(img,
                       voxel_dims,
@@ -162,6 +164,7 @@ def crop_then_reshape(img,
 
                       mask = None,
                       interpolation = 'bilinear',
+                      
                       ** kwargs
                      ):
     target_shape    = tf.cast(target_shape, tf.int32)

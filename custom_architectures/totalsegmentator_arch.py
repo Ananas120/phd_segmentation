@@ -73,7 +73,7 @@ TOTALSEGMENTATOR_MODELS = {
     },
     # custom models from authors
     'Task269_Body_extrem_6mm_1200subj' : {
-        'task_id' : 256, 'task' : 'body_extrem', 'url' : '{base_url}/{name}.zip'
+        'task_id' : 259, 'task' : 'body_extrem', 'url' : '{base_url}/{name}.zip'
     },    
     # custom models from constributor ?
     'Task258_lung_vessels_248subj' : {
@@ -294,23 +294,23 @@ def get_totalsegmentator_model_name(model_name = None, task_id = None, task = No
 
     assert model_name or task or task_id is not None
     
-    if model_name is not None:
+    if model_name:
         _assert_available(model_name, TOTALSEGMENTATOR_MODELS, 'model')
         return model_name
     
-    if task is not None:
+    if task:
         task_to_model = {infos['task'] : name for name, infos in TOTALSEGMENTATOR_MODELS.items()}
         _assert_available(task, task_to_model, 'task')
         return task_to_model[task]
     
-    if task is not None:
+    if task_id is not None:
         task_id_to_model = {infos['task_id'] : name for name, infos in TOTALSEGMENTATOR_MODELS.items()}
         _assert_available(task_id, task_id_to_model, 'task')
         return task_id_to_model[task_id]
 
 def get_totalsegmentator_model_infos(model_name = None, ** kwargs):
     model_name = get_totalsegmentator_model_name(model_name, ** kwargs)
-    
+
     return model_name, TOTALSEGMENTATOR_MODELS[model_name]
 
 def get_nnunet_plans(model_name = None, ** kwargs):

@@ -15,17 +15,29 @@ import numpy as np
 import pandas as pd
 import tensorflow as tf
 
-from scipy.ndimage.filters import gaussian_filter
-
 from loggers import timer
-from utils import convert_to_str
 from models.interfaces.base_image_model import BaseImageModel
-from utils.med_utils import load_medical_data, save_medical_data, build_mapping, crop_then_reshape, pad_or_crop
+from utils import convert_to_str, create_iterator, load_json, dump_json, plot_volume
+from utils.med_utils import (
+    load_medical_data, save_medical_data, get_shape, build_mapping, crop_then_reshape, pad_or_crop, resample_volume, rearrange_labels
+)
 
 logger      = logging.getLogger(__name__)
 time_logger = logging.getLogger('timer')
 
-def _get_step_size(image_shape, patch_size, step_size):
+_gaussians = {}
+
+def _get_step_size(image_shape, patch_size, step_size = 0.5):
+    """
+        Returns the start position for the patch-based slicing windows
+        
+        Arguments :
+            - image_shape : (h, w, depth) of the image
+            - patch_size  : (p_h, p_w, p_d), the size of the slicing windows in the 3-axes
+            - step_size   : float, the fraction of the patch_size to use as step size
+        Return :
+            - start_positions : 3-items list where each item is a np.ndarray representing the start position in each axis
+    """
     patch_size     = np.array(patch_size)
     image_shape    = np.array(image_shape)
     
@@ -46,23 +58,33 @@ def _get_step_size(image_shape, patch_size, step_size):
     
     return steps
 
+@timer
 def _get_gaussian(patch_size, sigma_scale = 1. / 8.):
-    patch_size = np.array(patch_size)
+    """ Return a 3-D gaussian (np.ndarray) of size `patch_size` """
+    global _gaussians
     
-    center = patch_size // 2
-    sigmas = patch_size * sigma_scale
-    
-    gaussian = np.zeros(patch_size)
-    gaussian[tuple(center)] = 1
-    gaussian = gaussian_filter(gaussian, sigmas, 0., mode = 'constant', cval = 0)
-    gaussian = gaussian / np.max(gaussian)
-    
-    mask = gaussian == 0
-    gaussian[mask] = np.min(gaussian[~mask])
-    
-    return gaussian.astype(np.float32)
+    if tuple(patch_size) not in _gaussians:
+        from scipy.ndimage.filters import gaussian_filter
+
+        patch_size = np.array(patch_size)
+
+        center = patch_size // 2
+        sigmas = patch_size * sigma_scale
+
+        gaussian = np.zeros(patch_size)
+        gaussian[tuple(center)] = 1
+        gaussian = gaussian_filter(gaussian, sigmas, 0., mode = 'constant', cval = 0)
+        gaussian = gaussian / np.max(gaussian)
+
+        mask = gaussian == 0
+        gaussian[mask] = np.min(gaussian[~mask])
+        
+        _gaussians[tuple(patch_size)] = gaussian.astype(np.float32)
+
+    return _gaussians[tuple(patch_size)]
 
 def _parse_data(data, key, get_frames = True, ** kwargs):
+    """ Return the filename (at `key` if `filename` is a `dict`) + possibly the start / end position (if provided) """
     filename, start, end = data, -1, -1
     if isinstance(data, (dict, pd.Series)):
         if get_frames:
@@ -72,6 +94,7 @@ def _parse_data(data, key, get_frames = True, ** kwargs):
     return filename, start, end
 
 def build_normalization_with_clip(mean, sd, percentile_00_5, percentile_99_5, ** kwargs):
+    """ Return a callable that normalizes the input by mean / sd after clipping it to the 5 / 95% percentiles (the arguments) """
     def normalize(data):
         data = tf.clip_by_value(data, percentile_00_5, percentile_99_5)
         return (data - mean) / sd
@@ -81,6 +104,40 @@ def build_normalization_with_clip(mean, sd, percentile_00_5, percentile_99_5, **
     percentile_00_5 = np.reshape(percentile_00_5, [1, 1, 1, -1])
     percentile_99_5 = np.reshape(percentile_99_5, [1, 1, 1, -1])
     return normalize
+
+@timer
+def combine_preds(preds, models):
+    """
+        Combines a list of outputs
+        
+        Arguments :
+            - preds  : list of `tf.Tensor / np.ndarray`, the model outputs to combine
+            - models : list of `MedUNet` models, the models used (actually required to get their labels)
+        Return :
+            - combined : the combination of all `preds`
+        
+        Note : `0` is expected to be the "null" label (e.g. "background") for all models
+        It means that the successive `preds[i]` will overwrite the result at every non-zero prediction of `preds[i]`
+        The `models[i].labels` is used to give an offset at the prediction `preds[i]` to not have overlap between
+        the different predicted labels
+        
+        Example : 
+        ```
+            preds    = [[0, 0, 2, 1], [1, 0, 1, 0]]
+            combined = combine_preds(preds, ...) # labels = [[None, 'a', 'b'], [None, 'c']]
+            print(combined) # [3, 0, 2, 3]
+        ```
+    """
+    result = preds[0]
+    if hasattr(result, 'numpy'): result = result.numpy()
+    offset = len(models[0].labels) - 1
+    for p, m in zip(preds[1:], models[1:]):
+        if hasattr(p, 'numpy'): p = p.numpy()
+        mask = p != 0
+        result[mask] = p[mask] + offset
+        offset += len(m.labels) - 1
+    
+    return result
 
 class MedUNet(BaseImageModel):
     def __init__(self,
@@ -107,6 +164,35 @@ class MedUNet(BaseImageModel):
 
                  ** kwargs
                 ):
+        """
+            Constructor for the base MedUNet interface
+            
+            Arguments :
+                - labels : list of str, the list of labels (empty list to use the pretrained labels)
+                           can also be `None` if the model is not a classifier
+                
+                - input_size : 3-element tuple (height, width, channel), the input size of the image
+                               **IMPORTANT** in case of 3-D U-Net, the input size is also a 3-tuple (h, w, c)
+                               The number of frames (or depth) is specified by the `n_frames` parameter
+                - resize_method : whether to resize or pad the input for resizing to the expected `input_size`
+                                  Note : the resizing for voxel resampling is **always** performed by interpolation and **not** padding
+                                  This resizing is used to fit the `input_size` (if fixed) or resize to a multiple of the downscaling factor
+                
+                
+                - n_frames   : the number of frames to use in case of 3-D UNet (`1` means 2-D UNet is used)
+                - voxel_dims : 3-element tuple, the expected voxel dimensions in the 3 axes
+                - slice_axis : on which axis to slice on
+                - transpose  : the transposition axis for the input 3-D volume (used in `TotalSegmentator` pretrained models)
+                
+                - nb_class   : fix the expected number of labels (if > len(labels), labels is padded with empty labels)
+                - pad_value  : the value used for padding
+                
+                - mapping    : a mapping for the labels (allows to combine multiple *mask labels* to one unique label
+                               See the example in the notebook for more information on its usage
+                
+                - image_normalization : the image normalization scheme
+                                        If `dict`, should contains the keys `mean`, `sd` and `percentile_{00 / 99}_5`
+        """
         if pretrained or pretrained_task or pretrained_task_id:
             from custom_architectures.totalsegmentator_arch import get_nnunet_plans, get_totalsegmentator_model_infos
             
@@ -115,15 +201,17 @@ class MedUNet(BaseImageModel):
             plans = get_nnunet_plans(model_name = pretrained)
             
             n_frames   = -1
-            voxel_dims = plans['plans_per_stage'][0]['current_spacing']
-            transpose  = [2, 1, 0]
+            if voxel_dims is None: voxel_dims = plans['plans_per_stage'][0]['current_spacing']
+            if transpose is None:  transpose  = [2, 1, 0]
+            if image_normalization is None:
+                image_normalization = plans['dataset_properties']['intensityproperties'][0]
+
             if labels is not None and not labels:
                 if 'classes' in infos:
                     labels = infos['classes']
                 else:
                     labels = [None] + plans['all_classes']
             
-            image_normalization = plans['dataset_properties']['intensityproperties'][0]
             kwargs.update({
                 'pretrained'      : pretrained,
                 'pretrained_name' : pretrained,
@@ -148,6 +236,7 @@ class MedUNet(BaseImageModel):
             self.nb_class = None
         else:
             self.labels   = list(labels) if not isinstance(labels, str) else [labels]
+            self.labels   = [str(l) if l is not None else l for l in self.labels]
             self.nb_class = max(max(1, nb_class if nb_class is not None else 1), len(self.labels))
             if self.nb_class > len(self.labels):
                 self.labels += [''] * (self.nb_class - len(self.labels))
@@ -236,6 +325,27 @@ class MedUNet(BaseImageModel):
     
     @timer
     def infer(self, data, win_len = -1, hop_len = -1, use_argmax = False, ** kwargs):
+        """
+            Generic inference method that internally calls specific inference method :
+            - if 2D UNet is used      : `_infer_2d` \*
+            - if `win_len` is a tuple : `_infer_with_patch` \*\*
+            - if `win_len <= hop_len` : `_infer_without_overlap` \*
+            - if `win_len > hop_len`  : `_infer_with_overlap`
+            - else : simple model call (also used if `win_len >= data.shape[self.slice_axis`)
+            
+            \* These functions are compiled in tensorflow graph, meaning that they are much faster than the other ones.
+            \*\* This function is highly inspired from the `NNUNet` project
+            
+            Arguments :
+                - data    : 4-D (h, w, d, c) volume (tf.Tensor / np.ndarray), the data to predict on
+                - win_len : int or tuple (patch size), the slice size (if 2D, used as the batch_size)
+                - hop_len : int, the step size (if `< win_len`, there is an overlap between slices)
+                - use_argmax : bool, whether to perform an argmax or not (if `False`, outputs the logits)
+                - kwargs     : forwarded to the specific inference function (mainly ignored)
+            Return :
+                - pred : 3-D int32 (labels, if `use_argmax == True`) or 4-D float32 (logits) tf.Tensor or np.ndarray, the output
+            
+        """
         def _remove_padding(output):
             output = output[0, : data.shape[0], : data.shape[1], : data.shape[2]]
             if self.transpose:
@@ -295,6 +405,7 @@ class MedUNet(BaseImageModel):
         for start_x in steps[0]:
             for start_y in steps[1]:
                 for start_z in steps[2]:
+                    time_logger.start_timer('patch prediction')
                     pred_patch = self(volume[
                         :, # batch axis
                         start_x : start_x + patch_size[0],
@@ -318,6 +429,7 @@ class MedUNet(BaseImageModel):
                         start_y : start_y + patch_size[1],
                         start_z : start_z + patch_size[2]
                     ] += gaussian
+                    time_logger.stop_timer('patch prediction')
 
         pred = (pred / counts).astype(np.float32)
         return pred if not use_argmax else np.argmax(pred, axis = -1).astype(np.int32)
@@ -399,8 +511,10 @@ class MedUNet(BaseImageModel):
             if not use_argmax: perms = perms + [3]
             volume = tf.transpose(volume, perms)
         return pred
-
+    
+    
     def preprocess_image(self, image, voxel_dims, mask = None, resize_to_multiple = True, ** kwargs):
+        """ Main processing function that normalizes and resize `image` to the expected `self.voxel_dims` """
         if tf.reduce_any(tf.shape(image) == 0):
             return image if mask is None else (image, mask)
         
@@ -502,6 +616,7 @@ class MedUNet(BaseImageModel):
         return self.augment_image(image, clip = False, ** kwargs)
     
     def preprocess_input(self, image, mask = None, ** kwargs):
+        """ Pads `image` (and `mask`) to a multiple of `self.downsampling_factor` (if `resize_method == 'pad'`) """
         if self.resize_method != 'pad': return (image, mask) if mask is not None else image
         shape     = tf.shape(image)
         multiples = tf.cast(self.downsampling_factor, shape.dtype)
@@ -533,6 +648,145 @@ class MedUNet(BaseImageModel):
             })
         return super().get_dataset_config(* args, ** kwargs)
     
+    @timer
+    def post_process(self, pred, origin, labels = None, mapping = None, ** kwargs):
+        dtype = tf.int32 if pred.dtype in (np.int32, tf.int32) else tf.float32
+        if mapping and pred.dtype in (np.int32, tf.int32):
+            if not labels: labels = self.labels
+            pred = rearrange_labels(pred, labels = labels, mapping = mapping, is_one_hot = False)
+        
+        shape_origin = get_shape(origin)
+        pred =  resample_volume(pred, voxel_dims = self.voxel_dims, target_shape = shape_origin, interpolation = 'nearest')[0]
+        return tf.cast(pred, dtype)
+
+    @timer
+    def predict(self,
+                filenames,
+                
+                friends = None,
+                
+                mapping = None,
+                
+                save = True,
+                overwrite   = False,
+                directory   = None,
+                output_dir  = None,
+                output_file = 'pred_{}.npz',
+                
+                display     = False,
+                plot_kwargs = {'strides' : 3},
+                
+                verbose     = False,
+                tqdm = lambda x: x,
+                
+                ** kwargs
+               ):
+        ##############################
+        #      Utility functions     #
+        ##############################
+        
+        def _get_filename(file):
+            if isinstance(file, (dict, pd.Series)):
+                file = file['images'] if 'images' in file else file['filename']
+            return file
+        
+        ####################
+        #  Initialization  #
+        ####################
+        
+        time_logger.start_timer('initialization')
+        
+        if verbose or display: tqdm = lambda x: x
+        if friends is not None and not isinstance(friends, (list, tuple)): friends = [friends]
+        if not isinstance(filenames, (list, tuple, pd.DataFrame)): filenames = [filenames]
+        filenames = [_get_filename(file) for file in create_iterator(filenames)]
+        
+        predicted = {}
+        if save:
+            if directory is None:  directory = self.pred_dir
+            if output_dir is None: output_dir = os.path.join(directory, 'segmentations')
+            
+            os.makedirs(directory, exist_ok = True)
+            os.makedirs(output_dir, exist_ok = True)
+            
+            map_file  = os.path.join(directory, 'map.json')
+            predicted = load_json(map_file, default = {})
+        
+        to_predict = filenames if overwrite else [file for file in filenames if file not in predicted]
+        to_predict = list(set(to_predict))
+        
+        time_logger.stop_timer('initialization')
+
+        ########################################
+        #     Dataset creation + main loop     #
+        ########################################
+        
+        #dataset    = prepare_dataset(to_predict, map_fn = self.get_input, batch_size = 0, cache = False)
+        all_labels = self.labels
+        if friends:
+            from models import get_pretrained
+            friends = [get_pretrained(f) if isinstance(f, str) else f for f in friends]
+            for f in friends: all_labels += f.labels[1:]
+        labels     = all_labels if mapping is None else mapping
+        
+        for file in tqdm(to_predict):
+            time_logger.start_timer('pre-processing')
+            inp = self.get_input(file)
+            time_logger.stop_timer('pre-processing')
+
+            pred  = self.infer(inp, ** kwargs)
+            
+            if friends:
+                time_logger.start_timer('friends prediction')
+                
+                preds = [pred]
+                for f in friends:
+                    if verbose: logger.info('Making prediction with friend {}...'.format(f.nom))
+                    time_logger.start_timer('inference of {}'.format(f.nom))
+                    
+                    if f.image_normalization == self.image_normalization and f.voxel_dims == self.voxel_dims:
+                        f_out = f.infer(inp, ** kwargs)
+                    else:
+                        f_out = f.infer(f.get_input(file), ** kwargs)
+                    preds.append(f_out if not hasattr(f_out, 'numpy') else f_out.numpy())
+                    
+                    time_logger.stop_timer('inference of {}'.format(f.nom))
+                
+                pred = combine_preds(preds, models = [self] + friends)
+                
+                time_logger.stop_timer('friends prediction')
+            
+            pred = self.post_process(pred, file, labels = all_labels, mapping = mapping)
+            
+            if display:
+                time_logger.start_timer('display')
+                plot_volume(pred, labels = labels, ** plot_kwargs)
+                time_logger.stop_timer('display')
+            
+            infos = {'segmentation' : pred, 'labels' : labels}
+            if save:
+                time_logger.start_timer('saving mask')
+                
+                out_file = predicted.get(file, {}).get('segmentation', output_file)
+                if callable(out_file): out_file = out_file(file)
+                elif '{}' in out_file: out_file = out_file.format(len(os.listdir(output_dir)))
+                
+                if file not in predicted: out_file = os.path.join(output_dir, out_file)
+                
+                save_medical_data(out_file, infos['segmentation'], origin = file, labels = labels, is_one_hot = False)
+                
+                infos['segmentation'] = out_file
+                time_logger.stop_timer('saving mask')
+
+            predicted[file] = infos
+            
+            if save:
+                time_logger.start_timer('saving json')
+                dump_json(map_file, predicted, indent = 4)
+                time_logger.stop_timer('saving json')
+
+        return [(file, predicted[file]) for file in filenames]
+
     def get_config(self, * args, ** kwargs):
         config = super().get_config(* args, ** kwargs)
         config.update({

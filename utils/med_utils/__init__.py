@@ -13,4 +13,5 @@ from utils.med_utils.data_io import *
 from utils.med_utils.label_utils import *
 from utils.med_utils.pre_processing import *
 from utils.med_utils.resampling import *
-from utils.med_utils.visualize import *
+from utils.med_utils.sparse_utils import *
+from utils.med_utils.metrics import *

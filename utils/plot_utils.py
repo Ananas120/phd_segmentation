@@ -914,6 +914,7 @@ def plot_embedding(embeddings = None, ids = None, marker = None, random_state = 
     return plot(** kwargs)
 
 def plot_volume(volume = None,
+                labels = None,
                 labels_to_show  = None,
                 strides     = 1,
                 background_label    = 0,
@@ -944,6 +945,10 @@ def plot_volume(volume = None,
         volume = volume[:: strides[0], :: strides[1], :: strides[2]]
 
     if labels_to_show:
+        if any(isinstance(l, str) for l in labels_to_show):
+            assert labels
+            labels_to_show = [labels.index(l) if isinstance(l, str) else l for l in labels_to_show]
+        
         mask = np.any(
             np.expand_dims(volume, axis = -1) == np.reshape(labels_to_show, [1, 1, 1, -1]),
             axis = -1

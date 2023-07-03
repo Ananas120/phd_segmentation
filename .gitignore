@@ -4,6 +4,8 @@
 *.nii.gz
 *.npy
 *.npz
+*.tneosr
+*.stensor
 pretrained_models/
 totalsegmentator/
 

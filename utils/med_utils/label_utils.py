@@ -82,6 +82,7 @@ def build_mapping(labels, output_format = 'dict'):
     return mapping
 
 def build_lookup_table(labels, mapping, default = 0):
+    if isinstance(labels, list): labels = [str(l) for l in labels]
     labels  = tf.cast(labels, tf.string)
     mapping = build_mapping(mapping, output_format  = 'tensor')
     
@@ -134,6 +135,7 @@ def rearrange_labels(array, labels, mapping, default = 0, is_one_hot = None, nam
             ])
     """
     with tf.name_scope(name or 'rearrange_labels'):
+        if isinstance(labels, list): labels = [str(l) for l in labels]
         if is_one_hot is None: is_one_hot  = array.shape[-1] == len(labels)
         is_sparse   = isinstance(array, tf.sparse.SparseTensor)
 

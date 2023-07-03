@@ -306,30 +306,58 @@ def _tf_load_dicom_series(filename : tf.Tensor,
 
 """ Saving functions """
 
-def save_medical_data(filename, data, voxel_dims, ** kwargs):
+def save_medical_data(filename, data, origin = None, voxel_dims = None, ** kwargs):
     ext = max(_saving_fn.keys(), key = lambda ext: -1 if not filename.endswith(ext) else len(ext))
 
     if not filename.endswith(ext):
         raise ValueError('Unsupported file type : {}'.format(os.path.basename(filename)))
     
-    return _saving_fn[ext](filename, data, voxel_dims = voxel_dims, ** kwargs)
+    if origin is not None and origin.endswith(('.nii', '.nii.gz')):
+        import nibabel as nib
+        
+        orig_file = nib.load(origin)
+        kwargs.update({'affine' : orig_file.affine, 'header' : orig_file.header, 'voxel_dims' : orig_file.header['pixdim'][1:4]})
+    
+    return _saving_fn[ext](filename, data, ** kwargs)
 
-def _nibabel_save(filename, data, affine, header, ** kwargs):
+def _get_sparse_saving_infos(data, is_one_hot = None, labels = None, ** kwargs):
+    if is_one_hot is None: is_one_hot = data.dtype in (np.uint8, bool, tf.uint8, tf.bool)
+    
+    if isinstance(data, tf.sparse.SparseTensor):
+        indices = data.indices.numpy()
+        shape   = tuple(data.dense_shape)
+        
+        if not is_one_hot:
+            indices = np.concatenate([indices, data.values.numpy()[:, np.newaxis]], axis = -1)
+    else:
+        if hasattr(data, 'numpy'): data = data.numpy()
+        mask    = np.where(data != 0)
+        if not is_one_hot:
+            mask = mask + (data[mask], )
+        
+        indices = np.stack(mask, axis = -1)
+        shape   = data.shape
+
+    if not is_one_hot:
+        assert labels, 'Either convert `data` to one-hot encoding, either provide `labels` !'
+        shape   = tuple(shape) + (len(labels), )
+
+    return indices, shape
+
+def _nibabel_save(filename, data, affine, header, voxel_dims = None, is_one_hot = None, ** kwargs):
     import nibabel as nib
     
     nifti = nib.Nifti1Image(data, affine, header = header, extra = kwargs)
     return nib.save(nifti, filename)
 
-def _numpy_savez(filename, data, voxel_dims, affine = None, labels = None, compressed = True, ** kwargs):
+def _numpy_savez(filename, data, voxel_dims, is_one_hot = None, affine = None, header = None, labels = None, compressed = True, ** kwargs):
     additionals = {}
     if affine is not None: additionals['affine'] = affine
     if labels is not None: additionals['labels'] = labels
-    if isinstance(data, tf.sparse.SparseTensor):
-        indices = data.indices.numpy()
-        shape   = data.dense_shape
-    else:
-        indices = np.stack(np.where(data), axis = -1)
-        shape   = data.shape
+    if header is not None: additionals.update(header)
+    for k in ('pixdim', 'shape'): additionals.pop(k, None)
+    
+    indices, shape = _get_sparse_saving_infos(data, is_one_hot = is_one_hot, labels = labels)
     
     saving_fn = np.savez if not compressed else np.savez_compressed
     saving_fn(filename, indices = indices, pixdim = np.array(voxel_dims), shape = np.array(shape), ** additionals)
@@ -348,10 +376,11 @@ def _tf_save(filename, data, voxel_dims, ** kwargs):
     return filename
 
 def _tf_save_sparse(filename, data, voxel_dims, ** kwargs):
-    if not isinstance(data, tf.sparse.SparseTensor): data = tf.sparse.from_dense(data)
-    filename = format_filename(filename, shape = data.dense_shape, voxel_dims = voxel_dims)
+    indices, shape = _get_sparse_saving_infos(data, ** kwargs)
+
+    filename = format_filename(filename, shape = shape, voxel_dims = voxel_dims)
     tf.io.write_file(
-        filename, tf.io.serialize_tensor(data.indices)
+        filename, tf.io.serialize_tensor(indices)
     )
     return filename
 
